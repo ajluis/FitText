@@ -1,0 +1,361 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum Sex {
+  male
+  female
+}
+
+enum ActivityLevel {
+  sedentary
+  light
+  moderate
+  active
+  very_active
+}
+
+enum PrimaryGoal {
+  fat_loss
+  muscle_gain
+  recomp
+  general_health
+}
+
+enum AccountabilityLevel {
+  light
+  medium
+  high
+}
+
+enum WeekDay {
+  SU
+  MO
+  TU
+  WE
+  TH
+  FR
+  SA
+}
+
+enum MealType {
+  breakfast
+  lunch
+  dinner
+  snack
+}
+
+enum FoodInputType {
+  text
+  photo
+  quick_log
+}
+
+enum WorkoutType {
+  strength
+  cardio
+  mixed
+  other
+}
+
+enum DistanceUnit {
+  miles
+  km
+}
+
+enum ReminderType {
+  breakfast
+  lunch
+  dinner
+  workout
+  weigh_in
+  hydration
+  daily_summary
+  morning_checkin
+  evening_checkin
+}
+
+enum OnboardingStep {
+  welcome
+  awaiting_goal
+  awaiting_weight
+  awaiting_height
+  awaiting_age
+  awaiting_sex
+  awaiting_activity
+  awaiting_target_confirm
+  awaiting_restrictions
+  awaiting_accountability
+  complete
+}
+
+enum SettingsMenu {
+  main
+  goals
+  reminders
+  stats
+  restrictions
+  profile
+}
+
+enum TimeOfDay {
+  morning
+  other
+}
+
+// ============================================
+// MODELS
+// ============================================
+
+model User {
+  id                     String              @id @default(uuid())
+  phone                  String              @unique
+  createdAt              DateTime            @default(now())
+  onboardingComplete     Boolean             @default(false)
+
+  // Physical Stats
+  currentWeight          Float?              // lbs
+  heightInches           Int?
+  age                    Int?
+  sex                    Sex?
+  activityLevel          ActivityLevel?
+
+  // Goal Configuration
+  primaryGoal            PrimaryGoal?
+  goalSetAt              DateTime?
+  targetWeight           Float?              // optional
+
+  // Calculated Targets (recalculated when inputs change)
+  tdee                   Int?
+  calorieTarget          Int?
+  proteinTarget          Int?
+
+  // Workout Settings
+  weeklyWorkoutTarget    Int                 @default(4)
+
+  // Preferences
+  dietaryRestrictions    String[]            @default([])
+
+  // Reminder Settings
+  accountabilityLevel    AccountabilityLevel @default(medium)
+  reminderBreakfastTime  String              @default("09:00") // HH:mm format
+  reminderLunchTime      String              @default("13:00")
+  reminderDinnerTime     String              @default("20:00")
+  reminderWorkoutTime    String?
+  dailySummaryTime       String              @default("21:00")
+  weighInDay             WeekDay             @default(WE)
+  hydrationReminders     Boolean             @default(false)
+  timezone               String              @default("America/New_York")
+
+  // Engagement Tracking
+  loggingStreakDays      Int                 @default(0)
+  streakLastLogged       DateTime?
+  totalDaysLogged        Int                 @default(0)
+  lastMessageAt          DateTime?
+
+  // Streak tracking
+  streakJustBroken       Int?                // If set, the streak that was just broken
+
+  // Pause state
+  remindersPaused        Boolean             @default(false)
+  remindersPausedUntil   DateTime?
+
+  // Relations
+  dailyLogs              DailyLog[]
+  foodEntries            FoodEntry[]
+  workoutEntries         WorkoutEntry[]
+  weightEntries          WeightEntry[]
+  reminders              Reminder[]
+  onboardingState        OnboardingState?
+  settingsState          SettingsState?
+  conversationContext    ConversationContext?
+}
+
+model DailyLog {
+  id              String        @id @default(uuid())
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date            DateTime      @db.Date
+
+  // Nutrition Totals (aggregated from FoodEntry)
+  caloriesTotal   Int           @default(0)
+  proteinTotal    Int           @default(0)
+
+  // Targets (snapshot from user profile that day)
+  calorieTarget   Int?
+  proteinTarget   Int?
+
+  // Flags
+  breakfastLogged Boolean       @default(false)
+  lunchLogged     Boolean       @default(false)
+  dinnerLogged    Boolean       @default(false)
+
+  // Workout
+  workoutLogged   Boolean       @default(false)
+  workoutDurationMinutes Int?
+
+  // Weight (if logged that day)
+  weight          Float?
+
+  // Summary
+  summarySent     Boolean       @default(false)
+  summarySentAt   DateTime?
+
+  // Relations
+  foodEntries     FoodEntry[]
+  workoutEntries  WorkoutEntry[]
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+model FoodEntry {
+  id            String        @id @default(uuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailyLogId    String
+  dailyLog      DailyLog      @relation(fields: [dailyLogId], references: [id], onDelete: Cascade)
+  loggedAt      DateTime      @default(now())
+
+  // Meal Classification
+  mealType      MealType
+
+  // Source
+  inputType     FoodInputType
+  rawInput      String        // Original message or "photo"
+  photoUrl      String?
+
+  // Parsed Data - stored as JSON
+  // Array of { name, quantity, calories, protein }
+  foodItems     Json          @default("[]")
+
+  // Totals
+  calories      Int
+  protein       Int
+
+  // Confirmation
+  userConfirmed Boolean       @default(false)
+  userAdjusted  Boolean       @default(false)
+
+  @@index([userId, loggedAt])
+  @@index([dailyLogId])
+}
+
+model WorkoutEntry {
+  id                      String        @id @default(uuid())
+  userId                  String
+  user                    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailyLogId              String
+  dailyLog                DailyLog      @relation(fields: [dailyLogId], references: [id], onDelete: Cascade)
+  loggedAt                DateTime      @default(now())
+
+  // Basic Info
+  workoutType             WorkoutType
+  durationMinutes         Int?
+
+  // For Cardio
+  cardioType              String?
+  distance                Float?
+  distanceUnit            DistanceUnit?
+
+  // For Strength - stored as JSON
+  // Array of { name, sets: [{ reps, weight }] }
+  exercises               Json?
+
+  // Simple Mode
+  simpleDescription       String?
+
+  // Calculated
+  totalVolume             Int?          // sum of sets × reps × weight
+  estimatedCaloriesBurned Int?
+
+  @@index([userId, loggedAt])
+  @@index([dailyLogId])
+}
+
+model WeightEntry {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  loggedAt    DateTime    @default(now())
+  date        DateTime    @db.Date
+  weight      Float
+
+  // Context
+  timeOfDay   TimeOfDay   @default(morning)
+  notes       String?
+
+  @@index([userId, date])
+}
+
+model Reminder {
+  id            String        @id @default(uuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminderType  ReminderType
+  scheduledTime String        // HH:mm format
+  lastSent      DateTime?
+  enabled       Boolean       @default(true)
+
+  @@unique([userId, reminderType])
+  @@index([userId])
+}
+
+model OnboardingState {
+  id              String          @id @default(uuid())
+  userId          String          @unique
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currentStep     OnboardingStep  @default(welcome)
+  startedAt       DateTime        @default(now())
+  lastInteraction DateTime        @default(now())
+}
+
+model SettingsState {
+  id                String        @id @default(uuid())
+  userId            String        @unique
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inSettings        Boolean       @default(false)
+  currentMenu       SettingsMenu  @default(main)
+  awaitingInputFor  String?       // e.g., "calorie_target", "breakfast_time"
+  enteredAt         DateTime      @default(now())
+}
+
+// For maintaining conversation context (e.g., pending confirmations)
+model ConversationContext {
+  id                  String    @id @default(uuid())
+  userId              String    @unique
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Pending food confirmation
+  pendingFoodEntry    Json?     // Temporary food entry awaiting confirmation
+
+  // Pending workout details
+  pendingWorkoutEntry Json?     // Temporary workout entry awaiting more info
+
+  // Last intent for context
+  lastIntent          String?
+  lastMessageAt       DateTime  @default(now())
+
+  updatedAt           DateTime  @updatedAt
+}
+
+// Track sent reminders to avoid duplicates
+model SentReminder {
+  id            String        @id @default(uuid())
+  userId        String
+  reminderType  ReminderType
+  sentAt        DateTime      @default(now())
+  sentForDate   DateTime      @db.Date
+
+  @@unique([userId, reminderType, sentForDate])
+  @@index([userId, sentForDate])
+}
