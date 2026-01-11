@@ -66,7 +66,7 @@ export async function sendMessage(options: SendMessageOptions): Promise<SendMess
       };
     }
 
-    const data = await response.json();
+    const data = await response.json() as { message_id?: string };
     return {
       success: true,
       messageId: data.message_id,

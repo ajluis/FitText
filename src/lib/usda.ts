@@ -68,7 +68,7 @@ export async function searchFoods(query: string, pageSize = 5): Promise<USDAFood
       return [];
     }
 
-    const data: USDASearchResult = await response.json();
+    const data = await response.json() as USDASearchResult;
     return data.foods || [];
   } catch (error) {
     console.error('USDA search error:', error);

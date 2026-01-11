@@ -1,8 +1,7 @@
-import { User, MealType, FoodInputType } from '@prisma/client';
+import { User, MealType, FoodInputType, Prisma } from '@prisma/client';
 import prisma from '../lib/db';
 import anthropic, { CLAUDE_MODEL, CLAUDE_VISION_MODEL, MAX_TOKENS } from '../lib/claude';
 import { sendSMS } from '../services/sendblue';
-import { lookupFood, scaleNutrition, PORTION_MULTIPLIERS } from '../lib/usda';
 import { getTodayDate, getCurrentTimeDecimal, percentage } from '../lib/calculations';
 import { MEAL_WINDOWS } from '../config';
 
@@ -379,13 +378,13 @@ export async function handleFoodConfirmation(
     // Clear pending
     await prisma.conversationContext.update({
       where: { userId: user.id },
-      data: { pendingFoodEntry: null, lastIntent: null },
+      data: { pendingFoodEntry: Prisma.DbNull, lastIntent: null },
     });
   } else if (correctionValue) {
     // Handle correction - for now, just ask them to re-enter
     await prisma.conversationContext.update({
       where: { userId: user.id },
-      data: { pendingFoodEntry: null, lastIntent: null },
+      data: { pendingFoodEntry: Prisma.DbNull, lastIntent: null },
     });
 
     await sendSMS(
@@ -422,7 +421,7 @@ async function logFood(
       inputType,
       rawInput,
       photoUrl,
-      foodItems: parsed.items,
+      foodItems: JSON.parse(JSON.stringify(parsed.items)),
       calories: parsed.totalCalories,
       protein: parsed.totalProtein,
       userConfirmed: true,
@@ -560,30 +559,26 @@ export async function handleQuickLog(
     return;
   }
 
-  const items = yesterdayEntry.foodItems as FoodItem[];
+  const items = yesterdayEntry.foodItems as unknown as FoodItem[];
   const itemSummary = items.map(i => i.name).join(', ');
+
+  const pendingEntry = {
+    items,
+    totalCalories: yesterdayEntry.calories,
+    totalProtein: yesterdayEntry.protein,
+    confidence: 'high',
+    mealType,
+  };
 
   await prisma.conversationContext.upsert({
     where: { userId: user.id },
     create: {
       userId: user.id,
-      pendingFoodEntry: {
-        items,
-        totalCalories: yesterdayEntry.calories,
-        totalProtein: yesterdayEntry.protein,
-        confidence: 'high',
-        mealType,
-      },
+      pendingFoodEntry: JSON.parse(JSON.stringify(pendingEntry)),
       lastIntent: 'quick_log',
     },
     update: {
-      pendingFoodEntry: {
-        items,
-        totalCalories: yesterdayEntry.calories,
-        totalProtein: yesterdayEntry.protein,
-        confidence: 'high',
-        mealType,
-      },
+      pendingFoodEntry: JSON.parse(JSON.stringify(pendingEntry)),
       lastIntent: 'quick_log',
       lastMessageAt: new Date(),
     },

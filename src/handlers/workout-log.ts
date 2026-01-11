@@ -1,4 +1,4 @@
-import { User, WorkoutType } from '@prisma/client';
+import { User, WorkoutType, Prisma } from '@prisma/client';
 import prisma from '../lib/db';
 import anthropic, { CLAUDE_MODEL, MAX_TOKENS } from '../lib/claude';
 import { sendSMS } from '../services/sendblue';
@@ -380,16 +380,14 @@ async function checkForPR(
   }, sets[0]);
 
   // Look for previous entries with this exercise
+  // Note: JSON path queries vary by database, so we'll fetch and filter in memory
   const previousEntries = await prisma.workoutEntry.findMany({
     where: {
       userId: user.id,
-      exercises: {
-        path: '$[*].name',
-        string_contains: exerciseName,
-      },
+      exercises: { not: Prisma.DbNull },
     },
     orderBy: { loggedAt: 'desc' },
-    take: 20,
+    take: 50,
   });
 
   if (previousEntries.length === 0) {
@@ -453,7 +451,7 @@ export async function handleWorkoutLog(
       cardioType: parsed.cardioType,
       distance: parsed.distance,
       distanceUnit: parsed.distanceUnit,
-      exercises: parsed.exercises || undefined,
+      exercises: parsed.exercises ? JSON.parse(JSON.stringify(parsed.exercises)) : undefined,
       simpleDescription: parsed.simpleDescription,
       totalVolume: parsed.totalVolume,
       estimatedCaloriesBurned: parsed.estimatedCaloriesBurned,
@@ -534,7 +532,7 @@ export async function getWeeklyWorkoutSummary(user: User): Promise<string> {
     } else if (workout.simpleDescription) {
       desc = workout.simpleDescription;
     } else if (workout.exercises) {
-      const exercises = workout.exercises as Exercise[];
+      const exercises = workout.exercises as unknown as Exercise[];
       desc = exercises.map(e => e.name).slice(0, 2).join(', ');
       if (exercises.length > 2) desc += '...';
     } else {

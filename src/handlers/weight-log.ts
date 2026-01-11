@@ -1,4 +1,4 @@
-import { User } from '@prisma/client';
+import { User, Prisma } from '@prisma/client';
 import prisma from '../lib/db';
 import { sendSMS } from '../services/sendblue';
 import { getTodayDate, parseWeight } from '../lib/calculations';
@@ -110,7 +110,7 @@ export async function confirmWeightLog(
   // Clear any pending context
   await prisma.conversationContext.update({
     where: { userId: user.id },
-    data: { pendingFoodEntry: null, lastIntent: null },
+    data: { pendingFoodEntry: Prisma.DbNull, lastIntent: null },
   }).catch(() => {}); // Ignore if doesn't exist
 
   // Send response
@@ -156,7 +156,7 @@ export async function handleWeightConfirmation(
   } else {
     await prisma.conversationContext.update({
       where: { userId: user.id },
-      data: { pendingFoodEntry: null, lastIntent: null },
+      data: { pendingFoodEntry: Prisma.DbNull, lastIntent: null },
     });
     await sendSMS(user.phone, "No problem. What's the correct weight?");
   }

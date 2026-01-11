@@ -1,24 +1,34 @@
 import { Queue, Worker, Job } from 'bullmq';
-import { ReminderType, AccountabilityLevel } from '@prisma/client';
+import { ReminderType } from '@prisma/client';
 import prisma from '../lib/db';
-import redis from '../lib/redis';
 import { sendSMS } from './sendblue';
-import { getTodayDate, getDayOfWeek, formatTime } from '../lib/calculations';
+import { getTodayDate, getDayOfWeek } from '../lib/calculations';
+import { config } from '../config';
 
 // Job types
-type JobType =
-  | 'check_reminders'
-  | 'send_daily_summary'
-  | 'check_inactive_users'
-  | 'check_weekly_summary';
+const JOB_TYPES = {
+  CHECK_REMINDERS: 'check_reminders',
+  SEND_DAILY_SUMMARY: 'send_daily_summary',
+  CHECK_INACTIVE_USERS: 'check_inactive_users',
+  CHECK_WEEKLY_SUMMARY: 'check_weekly_summary',
+} as const;
+
+type JobType = typeof JOB_TYPES[keyof typeof JOB_TYPES];
 
 interface ReminderJobData {
   type: JobType;
 }
 
+// Redis connection options for BullMQ
+const redisConnection = {
+  host: new URL(config.redis.url).hostname || 'localhost',
+  port: parseInt(new URL(config.redis.url).port || '6379', 10),
+  password: new URL(config.redis.url).password || undefined,
+};
+
 // Create queue
 const reminderQueue = new Queue<ReminderJobData>('reminders', {
-  connection: redis,
+  connection: redisConnection,
   defaultJobOptions: {
     removeOnComplete: 100,
     removeOnFail: 50,
@@ -684,7 +694,7 @@ async function processReminderJob(job: Job<ReminderJobData>): Promise<void> {
 export async function startScheduler(): Promise<void> {
   // Create worker
   const worker = new Worker<ReminderJobData>('reminders', processReminderJob, {
-    connection: redis,
+    connection: redisConnection,
     concurrency: 1, // Process one at a time to avoid rate limits
   });
 
@@ -699,8 +709,8 @@ export async function startScheduler(): Promise<void> {
   // Schedule recurring jobs
   // Check reminders every 15 minutes
   await reminderQueue.add(
-    'check_reminders',
-    { type: 'check_reminders' },
+    JOB_TYPES.CHECK_REMINDERS,
+    { type: JOB_TYPES.CHECK_REMINDERS },
     {
       repeat: {
         pattern: '*/15 * * * *', // Every 15 minutes
@@ -710,8 +720,8 @@ export async function startScheduler(): Promise<void> {
 
   // Check daily summaries every 30 minutes
   await reminderQueue.add(
-    'send_daily_summary',
-    { type: 'send_daily_summary' },
+    JOB_TYPES.SEND_DAILY_SUMMARY,
+    { type: JOB_TYPES.SEND_DAILY_SUMMARY },
     {
       repeat: {
         pattern: '*/30 * * * *', // Every 30 minutes
@@ -721,8 +731,8 @@ export async function startScheduler(): Promise<void> {
 
   // Check inactive users once a day at 10am
   await reminderQueue.add(
-    'check_inactive_users',
-    { type: 'check_inactive_users' },
+    JOB_TYPES.CHECK_INACTIVE_USERS,
+    { type: JOB_TYPES.CHECK_INACTIVE_USERS },
     {
       repeat: {
         pattern: '0 10 * * *', // 10am daily
@@ -732,8 +742,8 @@ export async function startScheduler(): Promise<void> {
 
   // Check weekly summaries on Sunday
   await reminderQueue.add(
-    'check_weekly_summary',
-    { type: 'check_weekly_summary' },
+    JOB_TYPES.CHECK_WEEKLY_SUMMARY,
+    { type: JOB_TYPES.CHECK_WEEKLY_SUMMARY },
     {
       repeat: {
         pattern: '0 19 * * 0', // 7pm Sunday
