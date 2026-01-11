@@ -5,6 +5,7 @@ const envSchema = z.object({
   REDIS_URL: z.string(),
   SENDBLUE_API_KEY: z.string(),
   SENDBLUE_API_SECRET: z.string(),
+  SENDBLUE_PHONE_NUMBER: z.string(),
   ANTHROPIC_API_KEY: z.string(),
   USDA_API_KEY: z.string(),
   PORT: z.string().default('3000'),
@@ -29,6 +30,7 @@ function loadConfig() {
     sendblue: {
       apiKey: parsed.data.SENDBLUE_API_KEY,
       apiSecret: parsed.data.SENDBLUE_API_SECRET,
+      phoneNumber: parsed.data.SENDBLUE_PHONE_NUMBER,
     },
     anthropic: {
       apiKey: parsed.data.ANTHROPIC_API_KEY,

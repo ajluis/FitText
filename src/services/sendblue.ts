@@ -39,6 +39,7 @@ export async function sendMessage(options: SendMessageOptions): Promise<SendMess
       number,
       content,
       send_style: sendStyle,
+      from_number: config.sendblue.phoneNumber,
     };
 
     if (mediaUrl) {
