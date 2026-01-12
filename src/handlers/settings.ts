@@ -4,6 +4,58 @@ import { sendSMS } from '../services/sendblue';
 import { isMenuSelection, isExitCommand } from '../services/message-router';
 import { parseHeight, parseWeight, parseTime, formatTime, calculateTargets } from '../lib/calculations';
 
+/**
+ * Validate and normalize timezone input
+ */
+function validateTimezone(tz: string): string | null {
+  // Common aliases
+  const aliases: Record<string, string> = {
+    'eastern': 'America/New_York',
+    'et': 'America/New_York',
+    'est': 'America/New_York',
+    'edt': 'America/New_York',
+    'central': 'America/Chicago',
+    'ct': 'America/Chicago',
+    'cst': 'America/Chicago',
+    'cdt': 'America/Chicago',
+    'mountain': 'America/Denver',
+    'mt': 'America/Denver',
+    'mst': 'America/Denver',
+    'mdt': 'America/Denver',
+    'pacific': 'America/Los_Angeles',
+    'pt': 'America/Los_Angeles',
+    'pst': 'America/Los_Angeles',
+    'pdt': 'America/Los_Angeles',
+    'utc': 'UTC',
+    'gmt': 'UTC',
+    'uk': 'Europe/London',
+    'london': 'Europe/London',
+    'tokyo': 'Asia/Tokyo',
+    'japan': 'Asia/Tokyo',
+    'jst': 'Asia/Tokyo',
+    'sydney': 'Australia/Sydney',
+    'australia': 'Australia/Sydney',
+    'aest': 'Australia/Sydney',
+    'singapore': 'Asia/Singapore',
+    'hong kong': 'Asia/Hong_Kong',
+    'hk': 'Asia/Hong_Kong',
+    'india': 'Asia/Kolkata',
+    'ist': 'Asia/Kolkata',
+    'dubai': 'Asia/Dubai',
+    'uae': 'Asia/Dubai',
+  };
+
+  const lower = tz.toLowerCase().trim();
+  const resolved = aliases[lower] || tz;
+
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: resolved });
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
 // Goal display names
 const GOAL_DISPLAY: Record<PrimaryGoal, string> = {
   fat_loss: 'Fat loss',
@@ -313,6 +365,7 @@ What would you like to change?
 function getRemindersMenu(user: User): string {
   return `/settings → Reminders
 
+Timezone: ${user.timezone}
 Accountability level: ${user.accountabilityLevel.charAt(0).toUpperCase() + user.accountabilityLevel.slice(1)}
 Breakfast reminder: ${formatTime(user.reminderBreakfastTime)}
 Lunch reminder: ${formatTime(user.reminderLunchTime)}
@@ -322,12 +375,13 @@ Weigh-in day: ${DAY_DISPLAY[user.weighInDay]}
 Hydration reminders: ${user.hydrationReminders ? 'On' : 'Off'}
 
 What would you like to change?
-1️⃣ Accountability level
-2️⃣ Meal reminder times
-3️⃣ Daily summary time
-4️⃣ Weigh-in day
-5️⃣ Hydration reminders
-6️⃣ Back to settings`;
+1️⃣ Timezone
+2️⃣ Accountability level
+3️⃣ Meal reminder times
+4️⃣ Daily summary time
+5️⃣ Weigh-in day
+6️⃣ Hydration reminders
+7️⃣ Back to settings`;
 }
 
 function getStatsMenu(user: User): string {
@@ -466,6 +520,16 @@ async function handleGoalsMenu(user: User, selection: number | null, input: stri
 async function handleRemindersMenu(user: User, selection: number | null, input: string): Promise<void> {
   switch (selection) {
     case 1:
+      await updateSettingsState(user.id, { awaitingInputFor: 'timezone' });
+      await sendSMS(user.phone, `Current timezone: ${user.timezone}
+
+Enter your timezone:
+• "Eastern", "Central", "Mountain", "Pacific"
+• Or full name like "America/New_York", "Asia/Tokyo"
+
+Traveling? This affects when reminders are sent and how your food history is organized.`);
+      break;
+    case 2:
       await updateSettingsState(user.id, { awaitingInputFor: 'accountability' });
       await sendSMS(user.phone, `How much accountability do you want?
 
@@ -475,21 +539,21 @@ async function handleRemindersMenu(user: User, selection: number | null, input: 
 
 Currently: ${user.accountabilityLevel.charAt(0).toUpperCase() + user.accountabilityLevel.slice(1)}`);
       break;
-    case 2:
+    case 3:
       await updateSettingsState(user.id, { awaitingInputFor: 'meal_times' });
       await sendSMS(user.phone, `Which meal time to change?
 1️⃣ Breakfast (currently ${formatTime(user.reminderBreakfastTime)})
 2️⃣ Lunch (currently ${formatTime(user.reminderLunchTime)})
 3️⃣ Dinner (currently ${formatTime(user.reminderDinnerTime)})`);
       break;
-    case 3:
+    case 4:
       await updateSettingsState(user.id, { awaitingInputFor: 'summary_time' });
       await sendSMS(user.phone, `When should I send your daily summary?
 
 Current: ${formatTime(user.dailySummaryTime)}
 Reply with a new time (like '9pm' or '21:00')`);
       break;
-    case 4:
+    case 5:
       await updateSettingsState(user.id, { awaitingInputFor: 'weigh_in_day' });
       await sendSMS(user.phone, `Which day for weekly weigh-in?
 1️⃣ Sunday
@@ -502,7 +566,7 @@ Reply with a new time (like '9pm' or '21:00')`);
 
 Currently: ${DAY_DISPLAY[user.weighInDay]}`);
       break;
-    case 5:
+    case 6:
       await prisma.user.update({
         where: { id: user.id },
         data: { hydrationReminders: !user.hydrationReminders },
@@ -514,7 +578,7 @@ Currently: ${DAY_DISPLAY[user.weighInDay]}`);
         await sendSMS(updatedUser.phone, getRemindersMenu(updatedUser));
       }
       break;
-    case 6:
+    case 7:
       await updateSettingsState(user.id, { currentMenu: 'main' });
       await sendSMS(user.phone, getMainMenu());
       break;
@@ -523,7 +587,7 @@ Currently: ${DAY_DISPLAY[user.weighInDay]}`);
         await updateSettingsState(user.id, { currentMenu: 'main' });
         await sendSMS(user.phone, getMainMenu());
       } else {
-        await sendSMS(user.phone, "Reply with a number 1-6, or 'back'.");
+        await sendSMS(user.phone, "Reply with a number 1-7, or 'back'.");
       }
   }
 }
@@ -883,6 +947,25 @@ Your new targets:
         if (updatedUser) await sendSMS(updatedUser.phone, getStatsMenu(updatedUser));
       } else {
         await sendSMS(user.phone, "Please reply with a number 1-4.");
+      }
+      break;
+    }
+
+    case 'timezone': {
+      const validTz = validateTimezone(input);
+      if (validTz) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { timezone: validTz },
+        });
+        await sendSMS(user.phone, `Timezone updated to ${validTz}.`);
+        await updateSettingsState(user.id, { awaitingInputFor: null, currentMenu: 'reminders' });
+        const updatedUser = await prisma.user.findUnique({ where: { id: user.id } });
+        if (updatedUser) await sendSMS(updatedUser.phone, getRemindersMenu(updatedUser));
+      } else {
+        await sendSMS(user.phone, `I didn't recognize that timezone. Try:
+• "Eastern", "Pacific", "Central", "Mountain"
+• "Asia/Tokyo", "Europe/London", "Australia/Sydney"`);
       }
       break;
     }
