@@ -11,6 +11,7 @@ import { handleWeightLogMessage, handleWeightConfirmation, confirmWeightLog } fr
 import { handleCommand } from './commands';
 import { enterSettings, isInSettings, processSettingsMessage } from './settings';
 import { handleQuestion, handleGreeting, handleFreeform } from '../services/coaching-ai';
+import { handleSettingsChange } from '../services/settings-ai';
 
 /**
  * Main message handler - routes incoming messages to appropriate handlers
@@ -123,6 +124,11 @@ async function routeMessage(
       if (classified.command) {
         await handleCommand(user, classified.command);
       }
+      break;
+
+    case 'settings_change':
+      const settingsResponse = await handleSettingsChange(user, content);
+      await sendSMS(user.phone, settingsResponse);
       break;
 
     case 'question':

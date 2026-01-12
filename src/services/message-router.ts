@@ -1,5 +1,6 @@
 import { User } from '@prisma/client';
 import anthropic, { CLAUDE_MODEL, MAX_TOKENS } from '../lib/claude';
+import { isSettingsRequest } from './settings-ai';
 
 // Intent types
 export type Intent =
@@ -8,6 +9,7 @@ export type Intent =
   | 'workout_log'
   | 'weight_log'
   | 'command'
+  | 'settings_change'
   | 'question'
   | 'confirmation'
   | 'correction'
@@ -112,6 +114,15 @@ function quickClassify(message: string, hasMedia: boolean): ClassifiedMessage | 
     }
   }
 
+  // Settings change requests (natural language)
+  if (isSettingsRequest(message)) {
+    return {
+      intent: 'settings_change',
+      confidence: 'high',
+      rawMessage: message,
+    };
+  }
+
   // Weight logging
   for (const pattern of WEIGHT_PATTERNS) {
     if (pattern.test(lower)) {
@@ -210,6 +221,7 @@ async function llmClassify(message: string, context?: { lastIntent?: string }): 
 - food_log: User is reporting what they ate/drank (e.g., "Had eggs for breakfast", "Chipotle bowl", "2 scoops protein powder")
 - workout_log: User is reporting exercise (e.g., "Did chest today", "Ran 3 miles", "Bench 185x8")
 - weight_log: User is reporting their weight (e.g., "183.5 this morning", "Weighed in at 180")
+- settings_change: User wants to change a setting (e.g., "Change my timezone to Tokyo", "Set my calorie target to 2000", "Switch to the friend coaching style")
 - question: User is asking about nutrition, fitness, or how to use the app (e.g., "How much protein should I eat?", "What's creatine?")
 - confirmation: User is confirming or denying something (e.g., "Yes", "No", "Correct", "That's wrong")
 - correction: User is correcting previously logged data (e.g., "No it was 8oz", "Actually 200 calories")
