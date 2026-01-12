@@ -20,6 +20,13 @@ export async function handleInboundMessage(
   content: string,
   mediaUrl?: string
 ): Promise<void> {
+  // Ignore tapback reactions (Loved "...", Liked "...", etc.)
+  const tapbackPattern = /^(Loved|Liked|Disliked|Laughed at|Emphasized|Questioned)\s+".+"/i;
+  if (tapbackPattern.test(content)) {
+    console.log('Ignoring tapback reaction');
+    return;
+  }
+
   console.log(`Inbound message from ${phone}: ${content.substring(0, 50)}...`);
 
   // Get or create user
@@ -137,11 +144,11 @@ async function routeMessage(
 
     case 'correction':
       // No context - ask what they want to correct
-      await sendSMS(user.phone, "What would you like to correct? You can log something new or text /today to see what you've logged.");
+      await sendSMS(user.phone, "not following - what do you want to change?");
       break;
 
     default:
-      await sendSMS(user.phone, "I'm not sure what you mean. You can log food, workouts, or ask me a question. Text /help for more options.");
+      await sendSMS(user.phone, "?");
   }
 }
 
