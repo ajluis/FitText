@@ -250,11 +250,13 @@ Return JSON only:
 
   // Fetch the image with timeout
   let base64Image: string;
-  let mediaType: string;
+  let mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 
   try {
+    console.log(`Fetching photo from URL: ${photoUrl.substring(0, 100)}...`);
     const imageResponse = await fetchWithTimeout(photoUrl, { timeoutMs: 15000 });
     if (!imageResponse.ok) {
+      console.error(`Image fetch failed with status ${imageResponse.status}`);
       return {
         success: false,
         error: {
@@ -266,7 +268,26 @@ Return JSON only:
     }
     const imageBuffer = await imageResponse.arrayBuffer();
     base64Image = Buffer.from(imageBuffer).toString('base64');
-    mediaType = imageResponse.headers.get('content-type') || 'image/jpeg';
+
+    // Normalize media type - extract just the mime type and map to supported formats
+    const rawContentType = imageResponse.headers.get('content-type') || 'image/jpeg';
+    const mimeType = rawContentType.split(';')[0].trim().toLowerCase();
+    console.log(`Image content-type: ${rawContentType}, normalized: ${mimeType}, size: ${imageBuffer.byteLength} bytes`);
+
+    // Map to supported types
+    const typeMap: Record<string, 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'> = {
+      'image/jpeg': 'image/jpeg',
+      'image/jpg': 'image/jpeg',
+      'image/png': 'image/png',
+      'image/gif': 'image/gif',
+      'image/webp': 'image/webp',
+      'image/heic': 'image/jpeg', // HEIC often gets converted, treat as JPEG
+      'image/heif': 'image/jpeg',
+      'application/octet-stream': 'image/jpeg', // Default binary to JPEG
+    };
+
+    mediaType = typeMap[mimeType] || 'image/jpeg';
+    console.log(`Using media type: ${mediaType}`);
   } catch (error) {
     console.error('Image fetch error:', error);
     return {
@@ -308,6 +329,11 @@ Return JSON only:
   );
 
   if (!result.success) {
+    console.error('Food photo parsing failed:', {
+      errorType: result.error?.type,
+      errorMessage: result.error?.message,
+      attempts: result.attempts,
+    });
     return {
       success: false,
       error: {

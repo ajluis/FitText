@@ -68,9 +68,15 @@ export function categorizeClaudeError(error: unknown): ClaudeError {
 
   if (error instanceof Anthropic.APIError) {
     const status = error.status;
+    console.error('Claude API Error details:', {
+      status,
+      message: error.message,
+      name: error.name,
+      headers: error.headers,
+    });
     return {
       type: 'api_error',
-      message: `API error: ${error.message}`,
+      message: `API error (${status}): ${error.message}`,
       retryable: status ? status >= 500 : false,
     };
   }
