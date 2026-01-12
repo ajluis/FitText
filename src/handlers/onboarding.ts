@@ -14,18 +14,17 @@ import {
   CollectedData,
 } from '../services/onboarding-ai';
 
-// Step numbers for progress indicator
+// Step numbers for progress indicator (no longer displayed but kept for reference)
 const STEP_NUMBERS: Partial<Record<OnboardingStep, { current: number; total: number }>> = {
-  awaiting_goal: { current: 1, total: 10 },
-  awaiting_weight: { current: 2, total: 10 },
-  awaiting_timezone: { current: 3, total: 10 },
-  awaiting_height: { current: 4, total: 10 },
-  awaiting_age: { current: 5, total: 10 },
-  awaiting_sex: { current: 6, total: 10 },
-  awaiting_activity: { current: 7, total: 10 },
-  awaiting_target_confirm: { current: 8, total: 10 },
-  awaiting_restrictions: { current: 9, total: 10 },
-  awaiting_accountability: { current: 10, total: 10 },
+  awaiting_goal: { current: 1, total: 9 },
+  awaiting_weight: { current: 2, total: 9 },
+  awaiting_timezone: { current: 3, total: 9 },
+  awaiting_height: { current: 4, total: 9 },
+  awaiting_age: { current: 5, total: 9 },
+  awaiting_sex: { current: 6, total: 9 },
+  awaiting_target_confirm: { current: 7, total: 9 },
+  awaiting_restrictions: { current: 8, total: 9 },
+  awaiting_accountability: { current: 9, total: 9 },
 };
 
 /**
@@ -101,7 +100,6 @@ const FIELD_TO_STEP: Record<string, OnboardingStep> = {
   heightInches: 'awaiting_height',
   age: 'awaiting_age',
   sex: 'awaiting_sex',
-  activityLevel: 'awaiting_activity',
   targetsConfirmed: 'awaiting_target_confirm',
   dietaryRestrictions: 'awaiting_restrictions',
   accountabilityLevel: 'awaiting_accountability',
@@ -322,20 +320,6 @@ function tryFallbackParsing(
       break;
     }
 
-    case 'awaiting_activity': {
-      const selection = isMenuSelection(input);
-      const activityMap: Record<number, 'sedentary' | 'light' | 'moderate' | 'active'> = {
-        1: 'sedentary',
-        2: 'light',
-        3: 'moderate',
-        4: 'active',
-      };
-      if (selection && activityMap[selection]) {
-        return { activityLevel: activityMap[selection] };
-      }
-      break;
-    }
-
     case 'awaiting_target_confirm': {
       const affirmatives = ['yes', 'yeah', 'yep', 'yup', 'sure', 'ok', 'okay', 'sounds good', 'good', 'y'];
       if (affirmatives.some(a => lowerInput.includes(a))) {
@@ -519,20 +503,19 @@ export async function processOnboardingMessage(
     updatedUser.heightInches &&
     updatedUser.age &&
     updatedUser.sex &&
-    updatedUser.activityLevel &&
     updatedUser.primaryGoal &&
     !newCollectedData.targetsConfirmed &&
     !newCollectedData.calorieTarget;
 
   if (needsTargetCalc) {
-    // Calculate targets
+    // Calculate targets (using 'light' as default activity level)
     const targets = calculateTargets(
       {
         currentWeight: updatedUser.currentWeight!,
         heightInches: updatedUser.heightInches!,
         age: updatedUser.age!,
         sex: updatedUser.sex!,
-        activityLevel: updatedUser.activityLevel!,
+        activityLevel: updatedUser.activityLevel || 'light',
       },
       updatedUser.primaryGoal!
     );
@@ -611,13 +594,6 @@ function getPromptForField(field: string | null): string {
       return "How old are you?";
     case 'sex':
       return "Male or female? (Just for calorie calculations)";
-    case 'activityLevel':
-      return `How active are you outside of workouts?
-
-1️⃣ Sedentary (desk job)
-2️⃣ Lightly active
-3️⃣ Moderately active
-4️⃣ Very active`;
     case 'dietaryRestrictions':
       return "Any dietary restrictions? (vegetarian, vegan, gluten-free, etc.) Reply 'none' if not.";
     case 'accountabilityLevel':

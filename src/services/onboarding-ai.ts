@@ -73,7 +73,6 @@ const FIELD_ORDER = [
   'heightInches',
   'age',
   'sex',
-  'activityLevel',
   'targetsConfirmed',
   'dietaryRestrictions',
   'accountabilityLevel',
@@ -86,7 +85,6 @@ const FIELD_DESCRIPTIONS: Record<string, string> = {
   heightInches: 'Height in inches (convert from feet if needed, e.g., 5\'10" = 70 inches)',
   age: 'Age in years',
   sex: 'Biological sex (male or female) - needed for accurate calorie calculations',
-  activityLevel: 'Activity level (sedentary, light, moderate, or active) outside of workouts',
   targetsConfirmed: 'Whether they confirmed the calculated calorie/protein targets',
   dietaryRestrictions: 'Any dietary restrictions (vegetarian, vegan, gluten-free, etc.) or "none"',
   accountabilityLevel: 'Preferred accountability level (light, medium, or high)',
@@ -98,14 +96,6 @@ Goal options:
 - muscle_gain: Focused on building muscle, willing to gain some fat
 - recomp: Simultaneously losing fat and gaining muscle (slower progress, good for beginners)
 - general_health: Balanced approach, maintain current body composition
-`;
-
-const ACTIVITY_EXPLANATIONS = `
-Activity levels (outside of intentional workouts):
-- sedentary: Desk job, minimal daily movement
-- light: Some walking, occasionally on feet
-- moderate: On feet most of the day, regularly moving
-- active: Physical job, constantly moving
 `;
 
 const ACCOUNTABILITY_EXPLANATIONS = `
@@ -131,7 +121,6 @@ export function getMissingFields(data: CollectedData): string[] {
   if (!data.heightInches) missing.push('heightInches');
   if (!data.age) missing.push('age');
   if (!data.sex) missing.push('sex');
-  if (!data.activityLevel) missing.push('activityLevel');
   if (!data.targetsConfirmed) missing.push('targetsConfirmed');
   if (data.dietaryRestrictions === undefined) missing.push('dietaryRestrictions');
   if (!data.accountabilityLevel) missing.push('accountabilityLevel');
@@ -232,8 +221,6 @@ export async function processOnboardingWithAI(
   let contextHint = '';
   if (nextField === 'primaryGoal') {
     contextHint = GOAL_EXPLANATIONS;
-  } else if (nextField === 'activityLevel') {
-    contextHint = ACTIVITY_EXPLANATIONS;
   } else if (nextField === 'accountabilityLevel') {
     contextHint = ACCOUNTABILITY_EXPLANATIONS;
   }
