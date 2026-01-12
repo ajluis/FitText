@@ -1,5 +1,6 @@
 import express from 'express';
 import http from 'http';
+import path from 'path';
 import { config } from './config';
 import prisma from './lib/db';
 import { getRedisConnection } from './lib/redis';
@@ -43,6 +44,9 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+// Static files (for VCF contact card, etc.)
+app.use('/static', express.static(path.join(__dirname, '../public')));
 
 // Routes
 app.use('/webhook', webhookRoutes);

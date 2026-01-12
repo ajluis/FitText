@@ -128,8 +128,8 @@ export async function sendMessage(options: SendMessageOptions): Promise<SendMess
 /**
  * Send a message and handle errors gracefully
  */
-export async function sendSMS(phone: string, message: string): Promise<boolean> {
-  const result = await sendMessage({ number: phone, content: message });
+export async function sendSMS(phone: string, message: string, mediaUrl?: string): Promise<boolean> {
+  const result = await sendMessage({ number: phone, content: message, mediaUrl });
 
   if (!result.success) {
     console.error(`Failed to send SMS to ${phone}:`, result.error);

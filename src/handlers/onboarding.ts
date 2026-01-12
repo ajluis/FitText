@@ -1,5 +1,6 @@
 import { OnboardingStep, PrimaryGoal, ActivityLevel, Sex, User } from '@prisma/client';
 import prisma from '../lib/db';
+import { config } from '../config';
 import { sendSMS, sendSMSWithEffect } from '../services/sendblue';
 import { parseHeight, parseWeight, calculateTargets } from '../lib/calculations';
 import { isMenuSelection } from '../services/message-router';
@@ -159,8 +160,9 @@ export async function startOnboarding(phone: string): Promise<void> {
     },
   });
 
-  // Send welcome message
-  await sendSMS(phone, MESSAGES.welcome);
+  // Send welcome message with contact card
+  const vcfUrl = `${config.server.webhookBaseUrl}/static/coach.vcf`;
+  await sendSMS(phone, MESSAGES.welcome, vcfUrl);
 }
 
 /**
