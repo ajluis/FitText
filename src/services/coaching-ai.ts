@@ -257,7 +257,14 @@ INSTRUCTIONS:
 - Use emoji sparingly (1-2 per message max)
 - NEVER recommend specific supplements, medications, or medical advice
 - For medical questions, recommend consulting a healthcare provider
-- When user asks about food history (e.g., "what did I eat last Thursday"), reference the FOOD HISTORY section above`;
+
+DATA QUERIES - When user asks about their food, meals, or progress:
+- "What have I eaten today?" → List SPECIFIC items from TODAY'S LOG with quantities and macros
+- "What did I eat [date]?" → Reference FOOD HISTORY section for that date, list the actual foods
+- "How much protein/calories?" → Give the specific number from the logs
+- "How am I doing?" → Summarize today's progress vs targets
+- Be specific and include actual food names, not just totals
+- If they haven't logged anything yet, tell them that directly`;
 }
 
 /**

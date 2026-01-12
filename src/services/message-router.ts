@@ -86,6 +86,19 @@ const QUESTION_WORDS = [
   'will', 'would', 'could', '?',
 ];
 
+// Data query patterns - user asking about their logged data (NOT logging new food)
+const DATA_QUERY_PATTERNS = [
+  /what (have|did|had) i (eat|eaten|have|log|had)/i,
+  /what i (ate|eaten|had|logged)/i,
+  /show me (my|what|today)/i,
+  /how (much|many) (calories|protein|carbs|have i)/i,
+  /what('s| is| was) my (progress|streak|weight|total)/i,
+  /tell me (about |what )?(my|i)/i,
+  /how am i doing/i,
+  /^my (progress|stats|summary|totals)/i,
+  /how('s| is) my (day|progress|diet)/i,
+];
+
 /**
  * Fast pattern-based classification (no LLM call)
  */
@@ -121,6 +134,18 @@ function quickClassify(message: string, hasMedia: boolean): ClassifiedMessage | 
       confidence: 'high',
       rawMessage: message,
     };
+  }
+
+  // Data queries - asking about logged data (BEFORE food/workout keywords)
+  // e.g., "What have I eaten today?" should be a question, not food_log
+  for (const pattern of DATA_QUERY_PATTERNS) {
+    if (pattern.test(lower)) {
+      return {
+        intent: 'question',
+        confidence: 'high',
+        rawMessage: message,
+      };
+    }
   }
 
   // Weight logging
