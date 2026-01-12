@@ -11,7 +11,7 @@ import { fetchWithTimeout } from '../lib/fetch-with-timeout';
 import { sendSMS, sendSMSWithEffect, SendStyle } from '../services/sendblue';
 import { getTodayDate, getCurrentTimeDecimal, percentage } from '../lib/calculations';
 import { MEAL_WINDOWS } from '../config';
-import sharp from 'sharp';
+import heicConvert from 'heic-convert';
 
 // Error result type for parsing functions
 interface ParseError {
@@ -263,15 +263,23 @@ function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/
 }
 
 /**
- * Convert HEIC image to JPEG using sharp
+ * Convert HEIC image to JPEG using heic-convert
  */
 async function convertHeicToJpeg(imageBuffer: Buffer): Promise<Buffer> {
   console.log('Converting HEIC to JPEG...');
-  const jpegBuffer = await sharp(imageBuffer)
-    .jpeg({ quality: 85 })
-    .toBuffer();
-  console.log(`Converted HEIC to JPEG: ${imageBuffer.length} bytes -> ${jpegBuffer.length} bytes`);
-  return jpegBuffer;
+  // heic-convert expects ArrayBuffer, not Buffer
+  const arrayBuffer = imageBuffer.buffer.slice(
+    imageBuffer.byteOffset,
+    imageBuffer.byteOffset + imageBuffer.byteLength
+  );
+  const jpegBuffer = await heicConvert({
+    buffer: arrayBuffer,
+    format: 'JPEG',
+    quality: 0.85,
+  });
+  const result = Buffer.from(jpegBuffer);
+  console.log(`Converted HEIC to JPEG: ${imageBuffer.length} bytes -> ${result.length} bytes`);
+  return result;
 }
 
 /**
