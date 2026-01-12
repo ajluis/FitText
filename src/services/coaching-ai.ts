@@ -38,10 +38,101 @@ const PERSONALITY_PROMPTS: Record<CoachingPersonality, { description: string; st
 };
 
 /**
+ * Format a date for display
+ */
+function formatDateForDisplay(date: Date, timezone: string): string {
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // Adjust for timezone
+  const localDate = new Date(date.toLocaleString('en-US', { timeZone: timezone }));
+
+  return `${days[localDate.getDay()]}, ${months[localDate.getMonth()]} ${localDate.getDate()}`;
+}
+
+/**
+ * Get detailed food history for the last N days
+ */
+async function getFoodHistory(user: User, days: number = 14): Promise<string> {
+  const today = getTodayDate(user.timezone);
+  const startDate = new Date(today);
+  startDate.setDate(startDate.getDate() - days);
+
+  const dailyLogs = await prisma.dailyLog.findMany({
+    where: {
+      userId: user.id,
+      date: {
+        gte: startDate,
+        lte: today,
+      },
+    },
+    include: {
+      foodEntries: {
+        orderBy: { loggedAt: 'asc' },
+      },
+    },
+    orderBy: { date: 'desc' },
+  });
+
+  if (dailyLogs.length === 0) {
+    return 'No food logged in the last 2 weeks.';
+  }
+
+  const lines: string[] = [];
+
+  for (const log of dailyLogs) {
+    const dateStr = formatDateForDisplay(log.date, user.timezone);
+    const isToday = log.date.toDateString() === today.toDateString();
+
+    if (log.foodEntries.length === 0) {
+      lines.push(`${dateStr}${isToday ? ' (today)' : ''}: No food logged`);
+      continue;
+    }
+
+    lines.push(`${dateStr}${isToday ? ' (today)' : ''}:`);
+
+    // Group by meal type
+    const mealTypes = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
+    for (const mealType of mealTypes) {
+      const entries = log.foodEntries.filter(e => e.mealType === mealType);
+      if (entries.length === 0) continue;
+
+      const items: string[] = [];
+      for (const entry of entries) {
+        const foodItems = entry.foodItems as { name: string; quantity: string; calories: number; protein: number }[];
+        for (const item of foodItems) {
+          items.push(`${item.name} (${item.quantity})`);
+        }
+      }
+
+      const mealLabel = mealType.charAt(0).toUpperCase() + mealType.slice(1);
+      lines.push(`  ${mealLabel}: ${items.join(', ')}`);
+    }
+
+    lines.push(`  Total: ${log.caloriesTotal} cal, ${log.proteinTotal}g protein`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Build system prompt with user context
  */
 async function buildSystemPrompt(user: User): Promise<string> {
   const today = getTodayDate(user.timezone);
+
+  // Get current date/time in user's timezone
+  const now = new Date();
+  const userLocalTime = now.toLocaleString('en-US', {
+    timeZone: user.timezone,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
 
   // Get today's log
   const dailyLog = await prisma.dailyLog.findUnique({
@@ -52,6 +143,9 @@ async function buildSystemPrompt(user: User): Promise<string> {
       },
     },
   });
+
+  // Get food history (last 14 days with details)
+  const foodHistory = await getFoodHistory(user, 14);
 
   // Get recent patterns (last 7 days)
   const sevenDaysAgo = new Date();
@@ -122,6 +216,9 @@ async function buildSystemPrompt(user: User): Promise<string> {
   return `ROLE:
 You are FitText, an SMS-based fitness and nutrition coach. ${personalityPrompt.description} Keep messages concise (SMS-friendly, under 300 chars when possible). Never shame or guilt — focus on progress, not perfection.
 
+CURRENT DATE/TIME:
+${userLocalTime} (${user.timezone})
+
 COACHING STYLE:
 ${personalityPrompt.style}
 
@@ -141,6 +238,9 @@ TODAY'S LOG:
 - Meals logged: ${dailyLog ? [dailyLog.breakfastLogged ? 'Breakfast ✓' : 'Breakfast ✗', dailyLog.lunchLogged ? 'Lunch ✓' : 'Lunch ✗', dailyLog.dinnerLogged ? 'Dinner ✓' : 'Dinner ✗'].join(', ') : 'None'}
 - Workout: ${dailyLog?.workoutLogged ? 'Yes' : 'Not yet'}
 
+FOOD HISTORY (Last 14 Days):
+${foodHistory}
+
 RECENT PATTERNS:
 - Avg protein last 7 days: ${avgProtein || 'N/A'}g (target: ${user.proteinTarget || 150}g)
 - Workouts this week: ${workoutsThisWeek} / ${user.weeklyWorkoutTarget}
@@ -156,7 +256,8 @@ INSTRUCTIONS:
 - Don't over-explain unless asked
 - Use emoji sparingly (1-2 per message max)
 - NEVER recommend specific supplements, medications, or medical advice
-- For medical questions, recommend consulting a healthcare provider`;
+- For medical questions, recommend consulting a healthcare provider
+- When user asks about food history (e.g., "what did I eat last Thursday"), reference the FOOD HISTORY section above`;
 }
 
 /**
