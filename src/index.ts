@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import { config } from './config';
 import prisma from './lib/db';
 import { getRedisConnection } from './lib/redis';
@@ -13,6 +14,7 @@ import logger, {
 } from './lib/logger';
 
 const app = express();
+let server: http.Server | null = null;
 
 // Middleware
 app.use(express.json());
@@ -126,8 +128,24 @@ app.use((err: Error, req: express.Request, res: express.Response, _next: express
 // Graceful shutdown
 async function shutdown(signal: string) {
   logShutdown(signal);
+
+  // Stop accepting new connections and wait for in-flight requests
+  if (server) {
+    await new Promise<void>((resolve) => {
+      server!.close(() => {
+        logger.info('HTTP server closed');
+        resolve();
+      });
+    });
+  }
+
+  // Stop scheduler
   await stopScheduler();
+
+  // Disconnect from database
   await prisma.$disconnect();
+  logger.info('Database disconnected');
+
   process.exit(0);
 }
 
@@ -146,7 +164,7 @@ async function main() {
     logger.info('Scheduler started');
 
     // Start the HTTP server
-    app.listen(config.server.port, () => {
+    server = app.listen(config.server.port, () => {
       logStartup({
         port: config.server.port,
         nodeEnv: process.env.NODE_ENV || 'development',
