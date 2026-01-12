@@ -147,6 +147,8 @@ async function updateStep(userId: string, step: OnboardingStep) {
  * Start onboarding for a new user
  */
 export async function startOnboarding(phone: string): Promise<void> {
+  console.log(`Starting onboarding for new user: ${phone}`);
+
   // Create user
   const user = await prisma.user.create({
     data: { phone },
@@ -162,6 +164,7 @@ export async function startOnboarding(phone: string): Promise<void> {
 
   // Send welcome message with contact card
   const vcfUrl = `${config.server.webhookBaseUrl}/static/coach.vcf`;
+  console.log(`Sending welcome message with VCF to ${phone}: ${vcfUrl}`);
   await sendSMS(phone, MESSAGES.welcome, vcfUrl);
 }
 

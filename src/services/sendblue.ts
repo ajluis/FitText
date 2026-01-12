@@ -63,6 +63,7 @@ export async function sendMessage(options: SendMessageOptions): Promise<SendMess
 
   if (mediaUrl) {
     body.media_url = mediaUrl;
+    console.log(`Sending message with media attachment: ${mediaUrl}`);
   }
 
   // Use retry with exponential backoff
