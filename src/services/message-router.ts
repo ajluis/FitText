@@ -159,11 +159,23 @@ function quickClassify(message: string, hasMedia: boolean): ClassifiedMessage | 
     }
   }
 
+  // Check for corrections - negative word + number (any length message)
+  // e.g., "no it's a different kind, has 30g of protein"
+  const isNegative = NEGATIVE_WORDS.some(w => lower.includes(w));
+  const isAffirmative = AFFIRMATIVE_WORDS.some(w => lower.includes(w));
+  const hasNumber = /\d+/.test(message);
+
+  if (isNegative && !isAffirmative && hasNumber) {
+    return {
+      intent: 'correction',
+      confidence: 'high',
+      isAffirmative: false,
+      rawMessage: message,
+    };
+  }
+
   // Simple affirmative/negative (short responses)
   if (words.length <= 4) {
-    const isAffirmative = AFFIRMATIVE_WORDS.some(w => lower.includes(w));
-    const isNegative = NEGATIVE_WORDS.some(w => lower.includes(w));
-
     if (isAffirmative && !isNegative) {
       return {
         intent: 'confirmation',
@@ -174,18 +186,6 @@ function quickClassify(message: string, hasMedia: boolean): ClassifiedMessage | 
     }
 
     if (isNegative && !isAffirmative) {
-      // Check if it includes a correction
-      const numberMatch = message.match(/\d+/);
-      if (numberMatch) {
-        return {
-          intent: 'correction',
-          confidence: 'medium',
-          isAffirmative: false,
-          correctionValue: numberMatch[0],
-          rawMessage: message,
-        };
-      }
-
       return {
         intent: 'confirmation',
         confidence: 'high',
