@@ -51,11 +51,7 @@ async function sendOnboardingMessage(
 
 // Static messages
 const MESSAGES = {
-  welcome: `Hey! 👋 I'm FitText — your fitness coach that lives in your texts.
-
-I'll help you track food, log workouts, and stay accountable. Everything happens right here in SMS — no app needed.
-
-Ready to set up? It takes about 2 minutes.`,
+  welcome: `This is Coach Alex from FitText. Pumped to get working together. Have a few quick questions first. That work?`,
 
   firstQuestion: `What's your main goal?
 
