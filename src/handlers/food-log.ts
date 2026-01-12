@@ -267,14 +267,12 @@ function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/
  */
 async function convertHeicToJpeg(imageBuffer: Buffer): Promise<Buffer> {
   console.log('Converting HEIC to JPEG...');
-  // heic-convert expects ArrayBuffer - create a fresh copy to avoid Node Buffer issues
-  const arrayBuffer = new ArrayBuffer(imageBuffer.length);
-  const view = new Uint8Array(arrayBuffer);
-  for (let i = 0; i < imageBuffer.length; i++) {
-    view[i] = imageBuffer[i];
-  }
+  // heic-convert internally uses heic-decode which expects a proper Uint8Array
+  // Node's Buffer extends Uint8Array but has extra properties that can cause issues
+  // Create a pure Uint8Array copy
+  const uint8Array = Uint8Array.from(imageBuffer);
   const jpegBuffer = await heicConvert({
-    buffer: arrayBuffer,
+    buffer: uint8Array.buffer as ArrayBuffer,
     format: 'JPEG',
     quality: 0.85,
   });
