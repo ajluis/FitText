@@ -38,20 +38,21 @@ function getStepIndicator(step: OnboardingStep): string {
 }
 
 /**
- * Send an onboarding message with step indicator
+ * Send an onboarding message (no step indicator)
  */
 async function sendOnboardingMessage(
   phone: string,
-  step: OnboardingStep,
+  _step: OnboardingStep,
   message: string
 ): Promise<void> {
-  const indicator = getStepIndicator(step);
-  await sendSMS(phone, indicator + message);
+  await sendSMS(phone, message);
 }
 
 // Static messages
 const MESSAGES = {
-  welcome: `This is Coach Alex from FitText. Pumped to get working together. Have a few quick questions first. That work?`,
+  welcome: `Hey this is Alex from FitText. Excited to get working with you.`,
+
+  welcomeFollowup: `You can send me a photo of what you eat or just a description and I'll log it here to meet your goals. Can I ask a few questions first?`,
 
   firstQuestion: `What's your main goal?
 
@@ -158,10 +159,17 @@ export async function startOnboarding(phone: string): Promise<void> {
     },
   });
 
-  // Send welcome message with contact card
+  // Send welcome sequence: 3 messages
+  // 1. Welcome message
+  await sendSMS(phone, MESSAGES.welcome);
+
+  // 2. Follow-up explaining the service
+  await sendSMS(phone, MESSAGES.welcomeFollowup);
+
+  // 3. Contact card (VCF)
   const vcfUrl = `${config.server.webhookBaseUrl}/static/coach.vcf`;
-  console.log(`Sending welcome message with VCF to ${phone}: ${vcfUrl}`);
-  await sendSMS(phone, MESSAGES.welcome, vcfUrl);
+  console.log(`Sending VCF to ${phone}: ${vcfUrl}`);
+  await sendSMS(phone, '', vcfUrl);
 }
 
 /**
