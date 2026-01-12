@@ -5,7 +5,7 @@ import { sendSMS } from '../services/sendblue';
 
 // Import handlers
 import { startOnboarding, processOnboardingMessage, needsOnboarding } from './onboarding';
-import { handleFoodLog, handleFoodPhoto, handleFoodConfirmation, getTodaySummary } from './food-log';
+import { handleFoodLog, handleFoodPhoto, handleFoodConfirmation, handleMealTypeSelection, getTodaySummary } from './food-log';
 import { handleWorkoutLog } from './workout-log';
 import { handleWeightLogMessage, handleWeightConfirmation, confirmWeightLog } from './weight-log';
 import { handleCommand } from './commands';
@@ -63,6 +63,14 @@ export async function handleInboundMessage(
   const context = await prisma.conversationContext.findUnique({
     where: { userId: user.id },
   });
+
+  // Check if this is a meal type response (for small food entries)
+  if (context?.pendingFoodEntry && !mediaUrl) {
+    const handled = await handleMealTypeSelection(user, content);
+    if (handled) {
+      return;
+    }
+  }
 
   // Classify the message
   const classified = await classifyMessage(content, !!mediaUrl, {

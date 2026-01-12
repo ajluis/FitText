@@ -13,6 +13,9 @@ import { getTodayDate, getCurrentTimeDecimal, percentage } from '../lib/calculat
 import { MEAL_WINDOWS } from '../config';
 import heicConvert from 'heic-convert';
 
+// Threshold for asking meal vs snack (calories)
+const SMALL_FOOD_THRESHOLD = 400;
+
 // Error result type for parsing functions
 interface ParseError {
   type: 'api_error' | 'parse_error' | 'image_fetch_error';
@@ -523,12 +526,11 @@ async function getOrCreateDailyLog(user: User) {
 /**
  * Format parsed food for confirmation message
  */
-function formatFoodConfirmation(parsed: ParsedFood, mealType: MealType): string {
+function formatFoodConfirmation(parsed: ParsedFood, mealType: MealType, askMealType: boolean = false): string {
   if (parsed.items.length === 0) {
     return "I couldn't identify the food. Can you describe it differently?";
   }
 
-  const mealLabel = mealType.charAt(0).toUpperCase() + mealType.slice(1);
   let message = `Here's what I ${parsed.confidence === 'low' ? 'think I ' : ''}see:\n`;
 
   for (const item of parsed.items) {
@@ -537,7 +539,10 @@ function formatFoodConfirmation(parsed: ParsedFood, mealType: MealType): string 
 
   message += `\nTotal: ${parsed.totalCalories} cal, ${parsed.totalProtein}g protein`;
 
-  if (parsed.confidence !== 'high') {
+  // For small foods, ask if it's a meal or snack
+  if (askMealType) {
+    message += `\n\nMeal or snack?`;
+  } else if (parsed.confidence !== 'high') {
     message += `\n\nIs that right? Reply 'yes' to log, or tell me what's different.`;
   }
 
@@ -598,9 +603,12 @@ export async function handleFoodLog(
     parsed.mealType = userMealType;
   }
 
-  // For high confidence, log directly
-  // For medium/low, store pending and ask for confirmation
-  if (parsed.confidence === 'high') {
+  // For small foods without explicit meal type, ask if it's a meal or snack
+  const needsMealType = !userMealType && parsed.totalCalories < SMALL_FOOD_THRESHOLD;
+
+  // For high confidence AND not needing meal type confirmation, log directly
+  // Otherwise, store pending and ask for confirmation
+  if (parsed.confidence === 'high' && !needsMealType) {
     await logFood(user, parsed, 'text', message);
   } else {
     // Store pending entry for confirmation
@@ -608,17 +616,17 @@ export async function handleFoodLog(
       where: { userId: user.id },
       create: {
         userId: user.id,
-        pendingFoodEntry: parsed as unknown as object,
+        pendingFoodEntry: { ...parsed, needsMealType } as unknown as object,
         lastIntent: 'food_log',
       },
       update: {
-        pendingFoodEntry: parsed as unknown as object,
+        pendingFoodEntry: { ...parsed, needsMealType } as unknown as object,
         lastIntent: 'food_log',
         lastMessageAt: new Date(),
       },
     });
 
-    await sendSMS(user.phone, formatFoodConfirmation(parsed, parsed.mealType));
+    await sendSMS(user.phone, formatFoodConfirmation(parsed, parsed.mealType, needsMealType));
   }
 }
 
@@ -639,22 +647,25 @@ export async function handleFoodPhoto(
 
   const parsed = result.data;
 
+  // For small foods, ask if it's a meal or snack
+  const needsMealType = parsed.totalCalories < SMALL_FOOD_THRESHOLD;
+
   // Always ask for confirmation with photos
   await prisma.conversationContext.upsert({
     where: { userId: user.id },
     create: {
       userId: user.id,
-      pendingFoodEntry: { ...parsed, photoUrl } as unknown as object,
+      pendingFoodEntry: { ...parsed, photoUrl, needsMealType } as unknown as object,
       lastIntent: 'food_photo',
     },
     update: {
-      pendingFoodEntry: { ...parsed, photoUrl } as unknown as object,
+      pendingFoodEntry: { ...parsed, photoUrl, needsMealType } as unknown as object,
       lastIntent: 'food_photo',
       lastMessageAt: new Date(),
     },
   });
 
-  await sendSMS(user.phone, formatFoodConfirmation(parsed, parsed.mealType));
+  await sendSMS(user.phone, formatFoodConfirmation(parsed, parsed.mealType, needsMealType));
 }
 
 /**
@@ -732,6 +743,70 @@ Return JSON only:
 }
 
 /**
+ * Parse meal type from user response
+ */
+function parseMealTypeResponse(message: string): MealType | null {
+  const lower = message.toLowerCase().trim();
+
+  // Direct meal type words
+  if (lower === 'snack' || lower.includes('as a snack') || lower.includes('as snack')) {
+    return 'snack';
+  }
+  if (lower === 'meal' || lower === 'breakfast' || lower.includes('as breakfast')) {
+    return 'breakfast';
+  }
+  if (lower === 'lunch' || lower.includes('as lunch') || lower.includes('as a lunch')) {
+    return 'lunch';
+  }
+  if (lower === 'dinner' || lower.includes('as dinner') || lower.includes('as a dinner')) {
+    return 'dinner';
+  }
+
+  return null;
+}
+
+/**
+ * Handle meal type selection for pending food entry
+ */
+export async function handleMealTypeSelection(
+  user: User,
+  message: string
+): Promise<boolean> {
+  const context = await prisma.conversationContext.findUnique({
+    where: { userId: user.id },
+  });
+
+  if (!context?.pendingFoodEntry) {
+    return false;
+  }
+
+  const pending = context.pendingFoodEntry as unknown as ParsedFood & { photoUrl?: string; needsMealType?: boolean };
+
+  // Only handle if we're waiting for meal type
+  if (!pending.needsMealType) {
+    return false;
+  }
+
+  const mealType = parseMealTypeResponse(message);
+  if (!mealType) {
+    return false;
+  }
+
+  // Update meal type and log
+  pending.mealType = mealType;
+  const inputType: FoodInputType = pending.photoUrl ? 'photo' : 'text';
+  await logFood(user, pending, inputType, pending.photoUrl || 'confirmed');
+
+  // Clear pending
+  await prisma.conversationContext.update({
+    where: { userId: user.id },
+    data: { pendingFoodEntry: Prisma.DbNull, lastIntent: null },
+  });
+
+  return true;
+}
+
+/**
  * Handle food confirmation
  */
 export async function handleFoodConfirmation(
@@ -748,7 +823,7 @@ export async function handleFoodConfirmation(
     return;
   }
 
-  const pending = context.pendingFoodEntry as unknown as ParsedFood & { photoUrl?: string };
+  const pending = context.pendingFoodEntry as unknown as ParsedFood & { photoUrl?: string; needsMealType?: boolean };
 
   if (isConfirmed) {
     // Log the food
