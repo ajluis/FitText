@@ -535,6 +535,80 @@ export async function handleFoodPhoto(
 }
 
 /**
+ * Parse a correction and update the pending food entry
+ */
+async function parseFoodCorrection(
+  correctionMessage: string,
+  pendingItems: FoodItem[],
+  user: User
+): Promise<{ success: true; updatedItems: FoodItem[] } | { success: false; error: string }> {
+  const itemsList = pendingItems.map((item, i) => `${i + 1}. ${item.name} (${item.quantity}) - ${item.calories} cal, ${item.protein}g protein`).join('\n');
+
+  const systemPrompt = `You are a nutrition parser. The user is correcting a food entry.
+
+CURRENT ITEMS:
+${itemsList}
+
+The user is providing a correction. Figure out which item they're correcting and provide the updated nutrition.
+
+Rules:
+1. Match the correction to the most likely item (e.g., "chobani greek yogurt" matches "Greek yogurt")
+2. Use accurate nutrition for the specified brand/type if mentioned
+3. Calculate for the quantity they specify
+
+Common nutrition references:
+- Chobani nonfat Greek yogurt: 90 cal, 16g protein per 3/4 cup (170g)
+- Fage 0% Greek yogurt: 100 cal, 18g protein per 3/4 cup
+- Generic Greek yogurt nonfat: 100 cal, 17g protein per cup
+
+Return JSON only:
+{
+  "matchedItemIndex": number (0-based index of item being corrected, or -1 if adding new item),
+  "updatedItem": { "name": "food name", "quantity": "amount", "calories": number, "protein": number }
+}`;
+
+  const result = await callClaudeWithRetry(
+    () =>
+      anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: MAX_TOKENS.foodParsing,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: correctionMessage }],
+      }),
+    { label: 'Food correction parsing' }
+  );
+
+  if (!result.success) {
+    return { success: false, error: 'Failed to parse correction' };
+  }
+
+  const response = result.data!;
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+  if (!jsonMatch) {
+    return { success: false, error: 'Could not parse correction' };
+  }
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    const updatedItems = [...pendingItems];
+
+    if (parsed.matchedItemIndex >= 0 && parsed.matchedItemIndex < updatedItems.length) {
+      // Update existing item
+      updatedItems[parsed.matchedItemIndex] = parsed.updatedItem;
+    } else {
+      // Add as new item
+      updatedItems.push(parsed.updatedItem);
+    }
+
+    return { success: true, updatedItems };
+  } catch {
+    return { success: false, error: 'Invalid correction format' };
+  }
+}
+
+/**
  * Handle food confirmation
  */
 export async function handleFoodConfirmation(
@@ -564,21 +638,49 @@ export async function handleFoodConfirmation(
       data: { pendingFoodEntry: Prisma.DbNull, lastIntent: null },
     });
   } else if (correctionValue) {
-    // Handle correction - for now, just ask them to re-enter
-    await prisma.conversationContext.update({
-      where: { userId: user.id },
-      data: { pendingFoodEntry: Prisma.DbNull, lastIntent: null },
-    });
+    // Smart correction - parse the correction and update specific items
+    const correctionResult = await parseFoodCorrection(correctionValue, pending.items, user);
 
-    await sendSMS(
-      user.phone,
-      `Got it, that wasn't right. Can you tell me what you had? Be specific about portions if you can.`
-    );
+    if (correctionResult.success) {
+      // Calculate new totals
+      const totalCalories = correctionResult.updatedItems.reduce((sum, item) => sum + item.calories, 0);
+      const totalProtein = correctionResult.updatedItems.reduce((sum, item) => sum + item.protein, 0);
+
+      // Update pending entry
+      const updatedPending: ParsedFood & { photoUrl?: string } = {
+        ...pending,
+        items: correctionResult.updatedItems,
+        totalCalories,
+        totalProtein,
+        confidence: 'high', // User corrected it
+      };
+
+      await prisma.conversationContext.update({
+        where: { userId: user.id },
+        data: {
+          pendingFoodEntry: JSON.parse(JSON.stringify(updatedPending)),
+          lastIntent: 'food_log',
+        },
+      });
+
+      // Show updated entry for confirmation
+      const itemsList = correctionResult.updatedItems
+        .map(item => `• ${item.name} (${item.quantity}) — ${item.calories} cal, ${item.protein}g protein`)
+        .join('\n');
+
+      await sendSMS(
+        user.phone,
+        `Updated:\n${itemsList}\n\nTotal: ${totalCalories} cal, ${totalProtein}g protein\n\nLook right?`
+      );
+    } else {
+      // Couldn't parse correction, ask for clarification
+      await sendSMS(user.phone, "not sure what to change - can you be more specific?");
+    }
   } else {
     // They said no but didn't provide correction
     await sendSMS(
       user.phone,
-      "No problem. What should I change? You can tell me the correct portions or items."
+      "what should I change?"
     );
   }
 }

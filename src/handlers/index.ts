@@ -190,8 +190,8 @@ async function handleCorrection(
   switch (context.lastIntent) {
     case 'food_log':
     case 'food_photo':
-      // User wants to correct food entry
-      await handleFoodConfirmation(user, false, classified.correctionValue);
+      // User wants to correct food entry - pass full message for smart parsing
+      await handleFoodConfirmation(user, false, classified.rawMessage);
       break;
 
     case 'weight_log':
