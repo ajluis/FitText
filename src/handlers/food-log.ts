@@ -11,6 +11,7 @@ import { fetchWithTimeout } from '../lib/fetch-with-timeout';
 import { sendSMS, sendSMSWithEffect, SendStyle } from '../services/sendblue';
 import { getTodayDate, getCurrentTimeDecimal, percentage } from '../lib/calculations';
 import { MEAL_WINDOWS } from '../config';
+import sharp from 'sharp';
 
 // Error result type for parsing functions
 interface ParseError {
@@ -224,7 +225,7 @@ Return JSON only:
  * Detect image type from magic bytes (file signature)
  * More reliable than content-type headers
  */
-function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null {
+function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | 'image/heic' | null {
   if (data.length < 12) {
     console.log('Image data too short for format detection');
     return null;
@@ -251,14 +252,26 @@ function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/
     return 'image/webp';
   }
 
-  // HEIC/HEIF: has 'ftyp' at offset 4 - NOT supported by Claude
+  // HEIC/HEIF: has 'ftyp' at offset 4 - needs conversion
   if (data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70) {
-    console.log('Detected HEIC/HEIF format - not supported by Claude Vision');
-    return null;
+    console.log('Detected HEIC/HEIF format - will convert to JPEG');
+    return 'image/heic';
   }
 
   console.log(`Unknown format. First 12 bytes: ${Array.from(data.slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
   return null;
+}
+
+/**
+ * Convert HEIC image to JPEG using sharp
+ */
+async function convertHeicToJpeg(imageBuffer: Buffer): Promise<Buffer> {
+  console.log('Converting HEIC to JPEG...');
+  const jpegBuffer = await sharp(imageBuffer)
+    .jpeg({ quality: 85 })
+    .toBuffer();
+  console.log(`Converted HEIC to JPEG: ${imageBuffer.length} bytes -> ${jpegBuffer.length} bytes`);
+  return jpegBuffer;
 }
 
 /**
@@ -319,19 +332,40 @@ Return JSON only:
     console.log(`Image details: content-type=${contentType}, detected=${detectedType}, size=${imageBuffer.byteLength} bytes`);
 
     if (!detectedType) {
-      // Unsupported format (likely HEIC from iPhone)
+      // Truly unsupported format
       return {
         success: false,
         error: {
           type: 'image_fetch_error',
-          message: 'Unsupported image format (likely HEIC)',
+          message: 'Unsupported image format',
           userMessage: "That image format isn't supported. Try taking the photo with your camera app instead of from your photo library, or just describe what you're eating.",
         },
       };
     }
 
-    mediaType = detectedType;
-    base64Image = Buffer.from(imageBuffer).toString('base64');
+    // Convert HEIC to JPEG if needed
+    let finalBuffer: Buffer;
+    if (detectedType === 'image/heic') {
+      try {
+        finalBuffer = await convertHeicToJpeg(Buffer.from(imageBuffer));
+        mediaType = 'image/jpeg';
+      } catch (conversionError) {
+        console.error('HEIC conversion failed:', conversionError);
+        return {
+          success: false,
+          error: {
+            type: 'image_fetch_error',
+            message: 'Failed to convert HEIC image',
+            userMessage: "I couldn't process that photo format. Try taking the photo directly with your camera, or describe what you're eating.",
+          },
+        };
+      }
+    } else {
+      finalBuffer = Buffer.from(imageBuffer);
+      mediaType = detectedType;
+    }
+
+    base64Image = finalBuffer.toString('base64');
 
     // Validate base64 length is reasonable
     if (base64Image.length < 100) {
