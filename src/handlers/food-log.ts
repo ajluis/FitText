@@ -1,9 +1,23 @@
 import { User, MealType, FoodInputType, Prisma } from '@prisma/client';
 import prisma from '../lib/db';
-import anthropic, { CLAUDE_MODEL, CLAUDE_VISION_MODEL, MAX_TOKENS } from '../lib/claude';
-import { sendSMS } from '../services/sendblue';
+import anthropic, {
+  CLAUDE_MODEL,
+  CLAUDE_VISION_MODEL,
+  MAX_TOKENS,
+  callClaudeWithRetry,
+  getUserFriendlyErrorMessage,
+} from '../lib/claude';
+import { fetchWithTimeout } from '../lib/fetch-with-timeout';
+import { sendSMS, sendSMSWithEffect, SendStyle } from '../services/sendblue';
 import { getTodayDate, getCurrentTimeDecimal, percentage } from '../lib/calculations';
 import { MEAL_WINDOWS } from '../config';
+
+// Error result type for parsing functions
+interface ParseError {
+  type: 'api_error' | 'parse_error' | 'image_fetch_error';
+  message: string;
+  userMessage: string;
+}
 
 // Types
 export interface FoodItem {
@@ -21,6 +35,8 @@ export interface ParsedFood {
   mealType: MealType;
 }
 
+export type ParseResult = { success: true; data: ParsedFood } | { success: false; error: ParseError };
+
 /**
  * Determine meal type based on time of day
  */
@@ -37,13 +53,75 @@ function getMealTypeFromTime(timezone: string): MealType {
   return 'snack';
 }
 
+// Meal type keywords for parsing user intent
+const MEAL_KEYWORDS: Record<string, MealType> = {
+  // Breakfast
+  'breakfast': 'breakfast',
+  'bfast': 'breakfast',
+  'morning': 'breakfast',
+  'for breakfast': 'breakfast',
+  'had breakfast': 'breakfast',
+  // Lunch
+  'lunch': 'lunch',
+  'for lunch': 'lunch',
+  'had lunch': 'lunch',
+  'midday': 'lunch',
+  // Dinner
+  'dinner': 'dinner',
+  'for dinner': 'dinner',
+  'had dinner': 'dinner',
+  'supper': 'dinner',
+  'evening': 'dinner',
+  // Snack
+  'snack': 'snack',
+  'snacking': 'snack',
+  'for snack': 'snack',
+  'for a snack': 'snack',
+};
+
 /**
- * Parse food from text description using LLM
+ * Extract meal type from user message if specified
+ * Returns the meal type and the message with meal keywords removed
+ */
+function extractMealType(message: string): { mealType: MealType | null; cleanedMessage: string } {
+  const lower = message.toLowerCase();
+
+  // Check for explicit meal type patterns like "breakfast: eggs" or "for breakfast, had eggs"
+  for (const [keyword, mealType] of Object.entries(MEAL_KEYWORDS)) {
+    // Check for "meal: food" pattern
+    const colonPattern = new RegExp(`^${keyword}[:\\s-]+`, 'i');
+    if (colonPattern.test(message)) {
+      return {
+        mealType,
+        cleanedMessage: message.replace(colonPattern, '').trim(),
+      };
+    }
+
+    // Check for "for meal" or "had meal" patterns
+    if (lower.includes(keyword)) {
+      // Don't match if keyword is part of a larger word (e.g., "launching" contains "lunch")
+      const wordBoundaryPattern = new RegExp(`\\b${keyword}\\b`, 'i');
+      if (wordBoundaryPattern.test(lower)) {
+        // Remove the meal keyword from the message for cleaner parsing
+        const cleanedMessage = message.replace(new RegExp(`\\b${keyword}[,:\\s]*\\b`, 'gi'), '').trim();
+        return {
+          mealType,
+          cleanedMessage: cleanedMessage || message, // Keep original if removing leaves nothing
+        };
+      }
+    }
+  }
+
+  return { mealType: null, cleanedMessage: message };
+}
+
+/**
+ * Parse food from text description using LLM with retry
  */
 async function parseFoodFromText(
   description: string,
   user: User
-): Promise<ParsedFood> {
+): Promise<ParseResult> {
   const systemPrompt = `You are a nutrition parser for a fitness tracking app. Parse the user's food description and estimate macros.
 
 Rules:
@@ -70,48 +148,85 @@ Return JSON only:
   "confidence": "high" | "medium" | "low"
 }`;
 
+  const result = await callClaudeWithRetry(
+    () =>
+      anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: MAX_TOKENS.foodParsing,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: description }],
+      }),
+    { label: 'Food text parsing' }
+  );
+
+  if (!result.success) {
+    return {
+      success: false,
+      error: {
+        type: 'api_error',
+        message: result.error?.message || 'Unknown error',
+        userMessage: getUserFriendlyErrorMessage(result.error!),
+      },
+    };
+  }
+
+  const response = result.data!;
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+  if (!jsonMatch) {
+    return {
+      success: false,
+      error: {
+        type: 'parse_error',
+        message: 'Could not extract JSON from response',
+        userMessage: `I couldn't understand "${description.slice(0, 30)}...". Try being more specific, like "2 eggs scrambled" or "chicken breast 6oz".`,
+      },
+    };
+  }
+
   try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: MAX_TOKENS.foodParsing,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: description }],
-    });
-
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed.items || parsed.items.length === 0) {
       return {
+        success: false,
+        error: {
+          type: 'parse_error',
+          message: 'No food items identified',
+          userMessage: `I couldn't identify any food in "${description.slice(0, 30)}...". Can you describe it differently?`,
+        },
+      };
+    }
+
+    return {
+      success: true,
+      data: {
         items: parsed.items || [],
         totalCalories: parsed.totalCalories || 0,
         totalProtein: parsed.totalProtein || 0,
         confidence: parsed.confidence || 'medium',
         mealType: getMealTypeFromTime(user.timezone),
-      };
-    }
-  } catch (error) {
-    console.error('Food parsing error:', error);
+      },
+    };
+  } catch {
+    return {
+      success: false,
+      error: {
+        type: 'parse_error',
+        message: 'Failed to parse JSON response',
+        userMessage: "I had trouble understanding that. Can you describe your food more simply?",
+      },
+    };
   }
-
-  // Fallback
-  return {
-    items: [],
-    totalCalories: 0,
-    totalProtein: 0,
-    confidence: 'low',
-    mealType: getMealTypeFromTime(user.timezone),
-  };
 }
 
 /**
- * Parse food from photo using Vision AI
+ * Parse food from photo using Vision AI with retry
  */
 async function parseFoodFromPhoto(
   photoUrl: string,
   user: User
-): Promise<ParsedFood> {
+): Promise<ParseResult> {
   const systemPrompt = `You are analyzing a food photo for macro estimation.
 
 Identify each food item visible. For each item, estimate:
@@ -133,62 +248,124 @@ Return JSON only:
   "notes": "optional notes about estimation"
 }`;
 
+  // Fetch the image with timeout
+  let base64Image: string;
+  let mediaType: string;
+
   try {
-    // Fetch the image
-    const imageResponse = await fetch(photoUrl);
-    const imageBuffer = await imageResponse.arrayBuffer();
-    const base64Image = Buffer.from(imageBuffer).toString('base64');
-    const mediaType = imageResponse.headers.get('content-type') || 'image/jpeg';
-
-    const response = await anthropic.messages.create({
-      model: CLAUDE_VISION_MODEL,
-      max_tokens: MAX_TOKENS.foodParsing,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-                data: base64Image,
-              },
-            },
-            {
-              type: 'text',
-              text: systemPrompt,
-            },
-          ],
-        },
-      ],
-    });
-
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
+    const imageResponse = await fetchWithTimeout(photoUrl, { timeoutMs: 15000 });
+    if (!imageResponse.ok) {
       return {
+        success: false,
+        error: {
+          type: 'image_fetch_error',
+          message: `Failed to fetch image: ${imageResponse.status}`,
+          userMessage: "I couldn't download that photo. Can you try sending it again?",
+        },
+      };
+    }
+    const imageBuffer = await imageResponse.arrayBuffer();
+    base64Image = Buffer.from(imageBuffer).toString('base64');
+    mediaType = imageResponse.headers.get('content-type') || 'image/jpeg';
+  } catch (error) {
+    console.error('Image fetch error:', error);
+    return {
+      success: false,
+      error: {
+        type: 'image_fetch_error',
+        message: error instanceof Error ? error.message : 'Image fetch failed',
+        userMessage: "I couldn't load that photo. Can you try sending it again, or describe what's on your plate?",
+      },
+    };
+  }
+
+  const result = await callClaudeWithRetry(
+    () =>
+      anthropic.messages.create({
+        model: CLAUDE_VISION_MODEL,
+        max_tokens: MAX_TOKENS.foodParsing,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+                  data: base64Image,
+                },
+              },
+              {
+                type: 'text',
+                text: systemPrompt,
+              },
+            ],
+          },
+        ],
+      }),
+    { label: 'Food photo parsing' }
+  );
+
+  if (!result.success) {
+    return {
+      success: false,
+      error: {
+        type: 'api_error',
+        message: result.error?.message || 'Unknown error',
+        userMessage: getUserFriendlyErrorMessage(result.error!),
+      },
+    };
+  }
+
+  const response = result.data!;
+  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+  if (!jsonMatch) {
+    return {
+      success: false,
+      error: {
+        type: 'parse_error',
+        message: 'Could not extract JSON from vision response',
+        userMessage: "I'm having trouble analyzing that photo. Try with better lighting, or just tell me what's on your plate.",
+      },
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed.items || parsed.items.length === 0) {
+      return {
+        success: false,
+        error: {
+          type: 'parse_error',
+          message: 'No food items identified in photo',
+          userMessage: "I couldn't identify any food in that photo. Can you try a clearer photo or describe what you're eating?",
+        },
+      };
+    }
+
+    return {
+      success: true,
+      data: {
         items: parsed.items || [],
         totalCalories: parsed.totalCalories || 0,
         totalProtein: parsed.totalProtein || 0,
         confidence: parsed.confidence || 'medium',
         mealType: getMealTypeFromTime(user.timezone),
-      };
-    }
-  } catch (error) {
-    console.error('Photo parsing error:', error);
+      },
+    };
+  } catch {
+    return {
+      success: false,
+      error: {
+        type: 'parse_error',
+        message: 'Failed to parse vision JSON response',
+        userMessage: "I had trouble understanding what's in that photo. Can you describe it instead?",
+      },
+    };
   }
-
-  // Fallback
-  return {
-    items: [],
-    totalCalories: 0,
-    totalProtein: 0,
-    confidence: 'low',
-    mealType: getMealTypeFromTime(user.timezone),
-  };
 }
 
 /**
@@ -280,15 +457,22 @@ export async function handleFoodLog(
   user: User,
   message: string
 ): Promise<void> {
-  // Parse the food
-  const parsed = await parseFoodFromText(message, user);
+  // Extract meal type if user specified it
+  const { mealType: userMealType, cleanedMessage } = extractMealType(message);
 
-  if (parsed.items.length === 0) {
-    await sendSMS(
-      user.phone,
-      "I couldn't figure out what that was. Can you describe it differently? Like 'chicken breast 6oz' or 'bowl of rice'."
-    );
+  // Parse the food
+  const result = await parseFoodFromText(cleanedMessage, user);
+
+  if (!result.success) {
+    await sendSMS(user.phone, result.error.userMessage);
     return;
+  }
+
+  const parsed = result.data;
+
+  // Override meal type if user specified it
+  if (userMealType) {
+    parsed.mealType = userMealType;
   }
 
   // For high confidence, log directly
@@ -323,15 +507,14 @@ export async function handleFoodPhoto(
   photoUrl: string
 ): Promise<void> {
   // Parse the photo
-  const parsed = await parseFoodFromPhoto(photoUrl, user);
+  const result = await parseFoodFromPhoto(photoUrl, user);
 
-  if (parsed.items.length === 0) {
-    await sendSMS(
-      user.phone,
-      "I'm having trouble identifying the food in that photo. Can you try again with better lighting, or just tell me what's on the plate?"
-    );
+  if (!result.success) {
+    await sendSMS(user.phone, result.error.userMessage);
     return;
   }
+
+  const parsed = result.data;
 
   // Always ask for confirmation with photos
   await prisma.conversationContext.upsert({
@@ -510,21 +693,69 @@ async function updateStreak(user: User): Promise<void> {
     },
   });
 
-  // Check for streak milestones
-  const milestones = [7, 14, 21, 30, 50, 100];
-  if (milestones.includes(newStreak)) {
-    const messages: Record<number, string> = {
-      7: "One week streak! 🔥 Consistency is everything. Keep going.",
-      14: "Two weeks straight. You're building a real habit. 💪",
-      21: "Three weeks! 🎯 They say it takes 21 days to form a habit. You're there.",
-      30: "30 DAYS! 🏆 You're in the top 10% of people who try to track. This is becoming part of who you are.",
-      50: "50 days. Incredible. This isn't a streak anymore — it's just what you do.",
-      100: "💯 ONE HUNDRED DAYS. You've logged more consistently than most people ever will. Respect.",
-    };
+  // Send streak recovery message when streak breaks
+  if (streakJustBroken !== null && streakJustBroken >= 3) {
+    const daysSinceLastLog = lastLoggedStr
+      ? Math.floor((today.getTime() - new Date(lastLoggedStr).getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
 
-    // Send milestone message after a short delay
+    let recoveryMessage: string;
+
+    if (streakJustBroken >= 14) {
+      // Long streak broken - emphasize the accomplishment
+      recoveryMessage = `Your ${streakJustBroken}-day streak ended, but that's ${streakJustBroken} days of progress that can't be erased. Day 1 starts now. 💪`;
+    } else if (streakJustBroken >= 7) {
+      // Week+ streak broken
+      recoveryMessage = `That was a solid ${streakJustBroken}-day run. Life happens. You're back, and that's what matters.`;
+    } else {
+      // 3-6 day streak broken
+      recoveryMessage = `Starting fresh. ${daysSinceLastLog > 3 ? "Everything okay? " : ""}Back at it. 👊`;
+    }
+
+    // Send after a short delay so it doesn't interrupt the food log response
     setTimeout(async () => {
-      await sendSMS(user.phone, messages[newStreak]);
+      await sendSMS(user.phone, recoveryMessage);
+    }, 3000);
+  }
+
+  // Check for streak milestones
+  interface StreakMilestone {
+    message: string;
+    effect: SendStyle;
+  }
+
+  const milestoneConfig: Record<number, StreakMilestone> = {
+    7: {
+      message: "One week streak! 🔥 Consistency is everything. Keep going.",
+      effect: 'confetti',
+    },
+    14: {
+      message: "Two weeks straight. You're building a real habit. 💪",
+      effect: 'confetti',
+    },
+    21: {
+      message: "Three weeks! 🎯 They say it takes 21 days to form a habit. You're there.",
+      effect: 'celebration',
+    },
+    30: {
+      message: "30 DAYS! 🏆 You're in the top 10% of people who try to track. This is becoming part of who you are.",
+      effect: 'celebration',
+    },
+    50: {
+      message: "50 days. Incredible. This isn't a streak anymore — it's just what you do.",
+      effect: 'fireworks',
+    },
+    100: {
+      message: "💯 ONE HUNDRED DAYS. You've logged more consistently than most people ever will. Respect.",
+      effect: 'fireworks',
+    },
+  };
+
+  const milestone = milestoneConfig[newStreak];
+  if (milestone) {
+    // Send milestone message after a short delay with celebratory effect
+    setTimeout(async () => {
+      await sendSMSWithEffect(user.phone, milestone.message, milestone.effect);
     }, 2000);
   }
 }

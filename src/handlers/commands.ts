@@ -1,11 +1,12 @@
 import { User } from '@prisma/client';
 import prisma from '../lib/db';
 import { sendSMS } from '../services/sendblue';
-import { enterSettings } from './settings';
+import { enterSettings, enterSettingsAt } from './settings';
 import { getTodaySummary } from './food-log';
 import { getWeeklyWorkoutSummary } from './workout-log';
 import { getWeightProgress } from './weight-log';
 import { getProgressSummary } from './progress';
+import { getCurrentTimeDecimal, getTodayDate } from '../lib/calculations';
 
 /**
  * Handle slash commands
@@ -16,9 +17,19 @@ export async function handleCommand(
 ): Promise<void> {
   const cmd = command.toLowerCase().trim();
 
-  switch (cmd) {
+  // Extract base command and arguments
+  const parts = cmd.split(/\s+/);
+  const baseCmd = parts[0];
+  const args = parts.slice(1).join(' ');
+
+  switch (baseCmd) {
     case '/settings':
-      await enterSettings(user);
+      // Support /settings goals, /settings reminders, etc.
+      if (args) {
+        await enterSettingsAt(user, args);
+      } else {
+        await enterSettings(user);
+      }
       break;
 
     case '/progress':
@@ -41,11 +52,31 @@ export async function handleCommand(
       break;
 
     case '/pause':
-      await handlePause(user);
+      await handlePause(user, args || undefined);
       break;
 
     case '/resume':
       await handleResume(user);
+      break;
+
+    // New shortcut commands
+    case '/goals':
+      await enterSettingsAt(user, 'goals');
+      break;
+
+    case '/weight':
+      const weightProgress = await getWeightProgress(user);
+      await sendSMS(user.phone, weightProgress);
+      break;
+
+    case '/macros':
+      const macros = await getMacrosSummary(user);
+      await sendSMS(user.phone, macros);
+      break;
+
+    case '/status':
+      const status = await getQuickStatus(user);
+      await sendSMS(user.phone, status);
       break;
 
     default:
@@ -62,21 +93,26 @@ export async function handleCommand(
 function getHelpMessage(): string {
   return `📱 FitText Commands
 
-/today — View today's food & workout log
-/week — View this week's summary
-/progress — See your overall progress
-/settings — Adjust goals, reminders & more
-/pause — Pause reminders temporarily
+Quick access:
+/status — Quick snapshot (streak, today, week)
+/macros — Today's calories & protein
+/weight — Weight progress
+/goals — Jump to goals settings
+
+Full commands:
+/today — Today's detailed log
+/week — Weekly summary
+/progress — Overall progress
+/settings — All settings
+/pause [time] — Pause reminders (e.g., /pause 4h)
 /resume — Resume reminders
 
 Just text naturally to log:
-• "Had eggs and toast for breakfast"
-• "Chipotle bowl for lunch"
-• "Did chest and back at the gym"
-• "185.5" (to log weight)
-• Send a food photo
-
-Questions? Just ask! I'm here to help.`;
+• "Had eggs and toast"
+• "Chipotle bowl"
+• "Did chest and back"
+• "185.5" (weight)
+• Send a food photo`;
 }
 
 /**
@@ -138,13 +174,21 @@ async function getWeeklyNutritionSummary(user: User): Promise<string> {
 }
 
 /**
- * Handle /pause command
+ * Handle /pause command with optional duration
  */
-async function handlePause(user: User): Promise<void> {
-  // For now, pause for 24 hours by default
-  // Could make this interactive to ask for duration
+async function handlePause(user: User, durationArg?: string): Promise<void> {
+  let pauseHours = 24; // default
+  let pauseMessage = '24 hours';
 
-  const pauseUntil = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  if (durationArg) {
+    const parsed = parsePauseDuration(durationArg, user.timezone);
+    if (parsed) {
+      pauseHours = parsed.hours;
+      pauseMessage = parsed.message;
+    }
+  }
+
+  const pauseUntil = new Date(Date.now() + pauseHours * 60 * 60 * 1000);
 
   await prisma.user.update({
     where: { id: user.id },
@@ -156,8 +200,78 @@ async function handlePause(user: User): Promise<void> {
 
   await sendSMS(
     user.phone,
-    `Reminders paused for 24 hours. ⏸️\n\nText /resume anytime to turn them back on.`
+    `Reminders paused for ${pauseMessage}. ⏸️\n\nText /resume anytime to turn them back on.`
   );
+}
+
+/**
+ * Parse pause duration from user input
+ * Supports: "4h", "4 hours", "until 6pm", "until tomorrow"
+ */
+function parsePauseDuration(
+  input: string,
+  timezone: string
+): { hours: number; message: string } | null {
+  const lower = input.toLowerCase().trim();
+
+  // Pattern: "4h" or "4 hours" or "4hr"
+  const hoursMatch = lower.match(/^(\d+)\s*h(ours?|r)?$/);
+  if (hoursMatch) {
+    const hours = parseInt(hoursMatch[1], 10);
+    if (hours >= 1 && hours <= 168) {
+      return { hours, message: `${hours} hour${hours > 1 ? 's' : ''}` };
+    }
+  }
+
+  // Pattern: "until 6pm" or "until 18:00"
+  const untilMatch = lower.match(/^until\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (untilMatch) {
+    let targetHour = parseInt(untilMatch[1], 10);
+    const targetMinute = untilMatch[2] ? parseInt(untilMatch[2], 10) : 0;
+    const meridiem = untilMatch[3]?.toLowerCase();
+
+    // Convert to 24-hour format
+    if (meridiem === 'pm' && targetHour !== 12) {
+      targetHour += 12;
+    } else if (meridiem === 'am' && targetHour === 12) {
+      targetHour = 0;
+    }
+
+    // Calculate hours until that time
+    const now = new Date();
+    const currentHour = getCurrentTimeDecimal(timezone);
+    const targetTime = targetHour + targetMinute / 60;
+
+    let hoursUntil = targetTime - currentHour;
+    if (hoursUntil <= 0) {
+      hoursUntil += 24; // Next day
+    }
+
+    if (hoursUntil >= 0.5 && hoursUntil <= 24) {
+      const displayTime = formatTimeForDisplay(targetHour, targetMinute);
+      return { hours: hoursUntil, message: `until ${displayTime}` };
+    }
+  }
+
+  // Pattern: "until tomorrow" or "tomorrow"
+  if (lower.includes('tomorrow')) {
+    // Calculate hours until 8am tomorrow
+    const currentHour = getCurrentTimeDecimal(timezone);
+    const hoursUntil = 24 - currentHour + 8; // Until 8am tomorrow
+    return { hours: Math.min(hoursUntil, 24), message: 'until tomorrow morning' };
+  }
+
+  return null;
+}
+
+/**
+ * Format time for display
+ */
+function formatTimeForDisplay(hour: number, minute: number): string {
+  const isPM = hour >= 12;
+  const displayHour = hour % 12 || 12;
+  const displayMinute = minute > 0 ? `:${minute.toString().padStart(2, '0')}` : '';
+  return `${displayHour}${displayMinute}${isPM ? 'pm' : 'am'}`;
 }
 
 /**
@@ -173,4 +287,113 @@ async function handleResume(user: User): Promise<void> {
   });
 
   await sendSMS(user.phone, `Reminders resumed! ▶️`);
+}
+
+/**
+ * Get today's macros summary (/macros command)
+ */
+async function getMacrosSummary(user: User): Promise<string> {
+  const today = getTodayDate(user.timezone);
+
+  const dailyLog = await prisma.dailyLog.findUnique({
+    where: {
+      userId_date: {
+        userId: user.id,
+        date: today,
+      },
+    },
+  });
+
+  const calorieTarget = user.calorieTarget || 2000;
+  const proteinTarget = user.proteinTarget || 150;
+
+  if (!dailyLog || (dailyLog.caloriesTotal === 0 && dailyLog.proteinTotal === 0)) {
+    return `Today's Macros\n\nNo food logged yet.\n\nTargets:\n• Calories: ${calorieTarget.toLocaleString()}\n• Protein: ${proteinTarget}g`;
+  }
+
+  const caloriesRemaining = calorieTarget - dailyLog.caloriesTotal;
+  const proteinRemaining = proteinTarget - dailyLog.proteinTotal;
+
+  let response = `Today's Macros\n\n`;
+  response += `Calories: ${dailyLog.caloriesTotal.toLocaleString()} / ${calorieTarget.toLocaleString()}`;
+  if (caloriesRemaining > 0) {
+    response += ` (${caloriesRemaining.toLocaleString()} left)`;
+  } else if (caloriesRemaining < 0) {
+    response += ` (${Math.abs(caloriesRemaining).toLocaleString()} over)`;
+  } else {
+    response += ` ✓`;
+  }
+
+  response += `\n\nProtein: ${dailyLog.proteinTotal}g / ${proteinTarget}g`;
+  if (proteinRemaining > 0) {
+    response += ` (${proteinRemaining}g left)`;
+  } else {
+    response += ` ✓`;
+  }
+
+  // Add suggestion if low on protein but have calories left
+  if (proteinRemaining > 30 && caloriesRemaining > 200) {
+    response += `\n\nTip: Need ${proteinRemaining}g protein with ${caloriesRemaining} cal left? Greek yogurt, chicken, or a shake.`;
+  }
+
+  return response;
+}
+
+/**
+ * Get quick status (/status command)
+ */
+async function getQuickStatus(user: User): Promise<string> {
+  const today = getTodayDate(user.timezone);
+
+  // Get today's log
+  const dailyLog = await prisma.dailyLog.findUnique({
+    where: {
+      userId_date: {
+        userId: user.id,
+        date: today,
+      },
+    },
+  });
+
+  // Get this week's workout count
+  const dayOfWeek = today.getDay();
+  const startOfWeek = new Date(today);
+  startOfWeek.setDate(today.getDate() - dayOfWeek);
+
+  const workoutsThisWeek = await prisma.workoutEntry.count({
+    where: {
+      userId: user.id,
+      loggedAt: {
+        gte: startOfWeek,
+      },
+    },
+  });
+
+  const calorieTarget = user.calorieTarget || 2000;
+  const proteinTarget = user.proteinTarget || 150;
+
+  let response = `Quick Status\n\n`;
+
+  // Streak
+  response += `🔥 ${user.loggingStreakDays} day streak\n\n`;
+
+  // Today
+  if (dailyLog && (dailyLog.caloriesTotal > 0 || dailyLog.proteinTotal > 0)) {
+    const calPct = Math.round((dailyLog.caloriesTotal / calorieTarget) * 100);
+    const protPct = Math.round((dailyLog.proteinTotal / proteinTarget) * 100);
+    response += `Today: ${calPct}% cal, ${protPct}% protein`;
+    if (dailyLog.workoutLogged) {
+      response += ` 💪`;
+    }
+  } else {
+    response += `Today: Nothing logged yet`;
+  }
+
+  // Week
+  response += `\n\nWeek: ${workoutsThisWeek}/${user.weeklyWorkoutTarget} workouts`;
+  if (workoutsThisWeek >= user.weeklyWorkoutTarget) {
+    response += ` ✓`;
+  }
+
+  return response;
 }

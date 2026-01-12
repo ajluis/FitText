@@ -1,10 +1,54 @@
 import { OnboardingStep, PrimaryGoal, ActivityLevel, Sex, User } from '@prisma/client';
 import prisma from '../lib/db';
-import { sendSMS } from '../services/sendblue';
-import { parseHeight, parseWeight, calculateTargets, formatTime } from '../lib/calculations';
+import { sendSMS, sendSMSWithEffect } from '../services/sendblue';
+import { parseHeight, parseWeight, calculateTargets } from '../lib/calculations';
 import { isMenuSelection } from '../services/message-router';
+import {
+  processOnboardingWithAI,
+  buildCollectedData,
+  getMissingFields,
+  getNextField,
+  cleanExtractedFields,
+  ExtractedFields,
+  CollectedData,
+} from '../services/onboarding-ai';
 
-// Onboarding messages
+// Step numbers for progress indicator
+const STEP_NUMBERS: Partial<Record<OnboardingStep, { current: number; total: number }>> = {
+  awaiting_goal: { current: 1, total: 10 },
+  awaiting_weight: { current: 2, total: 10 },
+  awaiting_timezone: { current: 3, total: 10 },
+  awaiting_height: { current: 4, total: 10 },
+  awaiting_age: { current: 5, total: 10 },
+  awaiting_sex: { current: 6, total: 10 },
+  awaiting_activity: { current: 7, total: 10 },
+  awaiting_target_confirm: { current: 8, total: 10 },
+  awaiting_restrictions: { current: 9, total: 10 },
+  awaiting_accountability: { current: 10, total: 10 },
+};
+
+/**
+ * Get step indicator for a message
+ */
+function getStepIndicator(step: OnboardingStep): string {
+  const stepInfo = STEP_NUMBERS[step];
+  if (!stepInfo) return '';
+  return `(Step ${stepInfo.current}/${stepInfo.total}) `;
+}
+
+/**
+ * Send an onboarding message with step indicator
+ */
+async function sendOnboardingMessage(
+  phone: string,
+  step: OnboardingStep,
+  message: string
+): Promise<void> {
+  const indicator = getStepIndicator(step);
+  await sendSMS(phone, indicator + message);
+}
+
+// Static messages
 const MESSAGES = {
   welcome: `Hey! 👋 I'm FitText — your fitness coach that lives in your texts.
 
@@ -12,56 +56,14 @@ I'll help you track food, log workouts, and stay accountable. Everything happens
 
 Ready to set up? It takes about 2 minutes.`,
 
-  askGoal: `First, what's your main goal?
+  firstQuestion: `What's your main goal?
 
 1️⃣ Fat loss
 2️⃣ Build muscle
 3️⃣ Body recomposition
 4️⃣ General health
 
-Just reply with the number.`,
-
-  askWeight: (goal: string) => `Got it — ${goal}. Let's get your baseline.
-
-What's your current weight? (Just the number, like 180)`,
-
-  askHeight: `And your height? (Like 5'10 or 70 inches)`,
-
-  askAge: `Age?`,
-
-  askSex: `Last one for targets — are you male or female? (This affects calorie calculations)`,
-
-  askActivity: `How active are you outside of intentional workouts?
-
-1️⃣ Sedentary (desk job, minimal movement)
-2️⃣ Lightly active (some walking, on feet occasionally)
-3️⃣ Moderately active (on feet most of the day)
-4️⃣ Very active (physical job, always moving)
-
-Reply with the number.`,
-
-  confirmTargets: (calories: number, protein: number, goal: string) => `Based on your info, here are your daily targets:
-
-🎯 Calories: ${calories.toLocaleString()} cal
-🎯 Protein: ${protein}g
-
-These are set for ${goal}. You can adjust anytime by texting /settings.
-
-Sound good?`,
-
-  askRestrictions: `Any dietary restrictions I should know about?
-
-Examples: vegetarian, vegan, gluten-free, dairy-free, low-FODMAP, nut allergy
-
-Reply with any that apply, or 'none'.`,
-
-  askAccountability: `Last thing — how much accountability do you want?
-
-1️⃣ Light — Daily summary only, no check-ins
-2️⃣ Medium — Reminders if I don't hear from you by meal times
-3️⃣ High — All reminders + morning/evening check-ins
-
-I recommend Medium to start. You can always change this.`,
+(Or just tell me in your own words!)`,
 
   complete: `You're all set! 🎉
 
@@ -75,46 +77,17 @@ Here's how to use me:
 
 What did you have for your last meal? Let's log it now.`,
 
-  // Error messages
-  invalidGoal: `I didn't catch that. Please reply with a number 1-4:
+  help: `Need help during setup?
 
-1️⃣ Fat loss
-2️⃣ Build muscle
-3️⃣ Body recomp
-4️⃣ General health`,
+Commands:
+• 'back' — Go to previous question
+• 'restart' — Start setup over
+• '/help' — Show this message
 
-  invalidWeight: `I couldn't parse that weight. Just send a number, like "185" or "185 lbs".`,
-
-  invalidHeight: `I couldn't parse that height. Try "5'10" or "70" (in inches).`,
-
-  invalidAge: `Please enter your age as a number (like 32).`,
-
-  invalidSex: `Please reply with "male" or "female" (this is just for calorie calculation accuracy).`,
-
-  invalidActivity: `Please reply with a number 1-4:
-
-1️⃣ Sedentary
-2️⃣ Lightly active
-3️⃣ Moderately active
-4️⃣ Very active`,
-
-  invalidAccountability: `Please reply with a number 1-3:
-
-1️⃣ Light
-2️⃣ Medium
-3️⃣ High`,
-
-  resumePrompt: `Hey! We didn't finish setting you up. Want to pick up where we left off? Just reply 'yes' to continue or 'start over' to begin again.`,
+Just answer the question to continue, or use a command above.`,
 };
 
-// Goal mapping
-const GOAL_MAP: Record<number, PrimaryGoal> = {
-  1: 'fat_loss',
-  2: 'muscle_gain',
-  3: 'recomp',
-  4: 'general_health',
-};
-
+// Goal display names
 const GOAL_DISPLAY: Record<PrimaryGoal, string> = {
   fat_loss: 'fat loss',
   muscle_gain: 'building muscle',
@@ -122,19 +95,18 @@ const GOAL_DISPLAY: Record<PrimaryGoal, string> = {
   general_health: 'general health',
 };
 
-// Activity mapping
-const ACTIVITY_MAP: Record<number, ActivityLevel> = {
-  1: 'sedentary',
-  2: 'light',
-  3: 'moderate',
-  4: 'active',
-};
-
-// Accountability mapping
-const ACCOUNTABILITY_MAP: Record<number, 'light' | 'medium' | 'high'> = {
-  1: 'light',
-  2: 'medium',
-  3: 'high',
+// Map step to next step based on what's collected
+const FIELD_TO_STEP: Record<string, OnboardingStep> = {
+  primaryGoal: 'awaiting_goal',
+  currentWeight: 'awaiting_weight',
+  timezone: 'awaiting_timezone',
+  heightInches: 'awaiting_height',
+  age: 'awaiting_age',
+  sex: 'awaiting_sex',
+  activityLevel: 'awaiting_activity',
+  targetsConfirmed: 'awaiting_target_confirm',
+  dietaryRestrictions: 'awaiting_restrictions',
+  accountabilityLevel: 'awaiting_accountability',
 };
 
 /**
@@ -192,36 +164,114 @@ export async function startOnboarding(phone: string): Promise<void> {
 }
 
 /**
- * Process onboarding message
+ * Determine the current step based on collected data
  */
-export async function processOnboardingMessage(
-  user: User,
-  message: string
-): Promise<void> {
-  const state = await getOrCreateOnboardingState(user.id);
+function determineStep(data: CollectedData): OnboardingStep {
+  const nextField = getNextField(data);
+
+  if (!nextField) {
+    return 'complete';
+  }
+
+  return FIELD_TO_STEP[nextField] || 'awaiting_goal';
+}
+
+/**
+ * Format target confirmation message
+ */
+function formatTargetConfirmation(calories: number, protein: number, goal: string): string {
+  return `Based on your info, here are your daily targets:
+
+🎯 Calories: ${calories.toLocaleString()} cal
+🎯 Protein: ${protein}g
+
+These are set for ${goal}. You can adjust anytime by texting /settings.
+
+Sound good?`;
+}
+
+/**
+ * Update user with extracted fields
+ */
+async function updateUserWithFields(
+  userId: string,
+  fields: ExtractedFields
+): Promise<User> {
+  const updateData: Record<string, unknown> = {};
+
+  if (fields.primaryGoal) {
+    updateData.primaryGoal = fields.primaryGoal;
+    updateData.goalSetAt = new Date();
+  }
+  if (fields.currentWeight !== undefined) {
+    updateData.currentWeight = fields.currentWeight;
+  }
+  if (fields.heightInches !== undefined) {
+    updateData.heightInches = fields.heightInches;
+  }
+  if (fields.age !== undefined) {
+    updateData.age = fields.age;
+  }
+  if (fields.sex) {
+    updateData.sex = fields.sex;
+  }
+  if (fields.activityLevel) {
+    updateData.activityLevel = fields.activityLevel;
+  }
+  if (fields.timezone) {
+    updateData.timezone = fields.timezone;
+  }
+  if (fields.dietaryRestrictions !== undefined) {
+    updateData.dietaryRestrictions = fields.dietaryRestrictions;
+  }
+  if (fields.accountabilityLevel) {
+    updateData.accountabilityLevel = fields.accountabilityLevel;
+  }
+
+  if (Object.keys(updateData).length > 0) {
+    return await prisma.user.update({
+      where: { id: userId },
+      data: updateData,
+    });
+  }
+
+  return await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+}
+
+/**
+ * Try fallback parsing for common fields when LLM fails
+ */
+function tryFallbackParsing(
+  message: string,
+  step: OnboardingStep
+): ExtractedFields | null {
   const input = message.trim();
   const lowerInput = input.toLowerCase();
 
-  switch (state.currentStep) {
-    case 'welcome': {
-      // Any response moves to goal question
-      await updateStep(user.id, 'awaiting_goal');
-      await sendSMS(user.phone, MESSAGES.askGoal);
-      break;
-    }
-
+  switch (step) {
     case 'awaiting_goal': {
       const selection = isMenuSelection(input);
-      if (selection && selection >= 1 && selection <= 4) {
-        const goal = GOAL_MAP[selection];
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { primaryGoal: goal, goalSetAt: new Date() },
-        });
-        await updateStep(user.id, 'awaiting_weight');
-        await sendSMS(user.phone, MESSAGES.askWeight(GOAL_DISPLAY[goal]));
-      } else {
-        await sendSMS(user.phone, MESSAGES.invalidGoal);
+      const goalMap: Record<number, PrimaryGoal> = {
+        1: 'fat_loss',
+        2: 'muscle_gain',
+        3: 'recomp',
+        4: 'general_health',
+      };
+      if (selection && goalMap[selection]) {
+        return { primaryGoal: goalMap[selection] };
+      }
+      // Try text matching
+      if (lowerInput.includes('fat') || lowerInput.includes('lose') || lowerInput.includes('weight loss')) {
+        return { primaryGoal: 'fat_loss' };
+      }
+      if (lowerInput.includes('muscle') || lowerInput.includes('bulk') || lowerInput.includes('gain')) {
+        return { primaryGoal: 'muscle_gain' };
+      }
+      if (lowerInput.includes('recomp')) {
+        return { primaryGoal: 'recomp' };
+      }
+      if (lowerInput.includes('health') || lowerInput.includes('maintain')) {
+        return { primaryGoal: 'general_health' };
       }
       break;
     }
@@ -229,14 +279,7 @@ export async function processOnboardingMessage(
     case 'awaiting_weight': {
       const weight = parseWeight(input);
       if (weight) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { currentWeight: weight },
-        });
-        await updateStep(user.id, 'awaiting_height');
-        await sendSMS(user.phone, MESSAGES.askHeight);
-      } else {
-        await sendSMS(user.phone, MESSAGES.invalidWeight);
+        return { currentWeight: weight };
       }
       break;
     }
@@ -244,14 +287,7 @@ export async function processOnboardingMessage(
     case 'awaiting_height': {
       const height = parseHeight(input);
       if (height) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { heightInches: height },
-        });
-        await updateStep(user.id, 'awaiting_age');
-        await sendSMS(user.phone, MESSAGES.askAge);
-      } else {
-        await sendSMS(user.phone, MESSAGES.invalidHeight);
+        return { heightInches: height };
       }
       break;
     }
@@ -259,151 +295,330 @@ export async function processOnboardingMessage(
     case 'awaiting_age': {
       const age = parseInt(input, 10);
       if (age && age >= 13 && age <= 120) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { age },
-        });
-        await updateStep(user.id, 'awaiting_sex');
-        await sendSMS(user.phone, MESSAGES.askSex);
-      } else {
-        await sendSMS(user.phone, MESSAGES.invalidAge);
+        return { age };
       }
       break;
     }
 
     case 'awaiting_sex': {
-      let sex: Sex | null = null;
       if (lowerInput.includes('male') && !lowerInput.includes('female')) {
-        sex = 'male';
-      } else if (lowerInput.includes('female') || lowerInput === 'f') {
-        sex = 'female';
-      } else if (lowerInput === 'm') {
-        sex = 'male';
+        return { sex: 'male' };
       }
-
-      if (sex) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { sex },
-        });
-        await updateStep(user.id, 'awaiting_activity');
-        await sendSMS(user.phone, MESSAGES.askActivity);
-      } else {
-        await sendSMS(user.phone, MESSAGES.invalidSex);
+      if (lowerInput.includes('female') || lowerInput === 'f') {
+        return { sex: 'female' };
+      }
+      if (lowerInput === 'm') {
+        return { sex: 'male' };
       }
       break;
     }
 
     case 'awaiting_activity': {
       const selection = isMenuSelection(input);
-      if (selection && selection >= 1 && selection <= 4) {
-        const activity = ACTIVITY_MAP[selection];
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { activityLevel: activity },
-        });
-
-        // Calculate targets
-        const updatedUser = await prisma.user.findUnique({ where: { id: user.id } });
-        if (updatedUser?.currentWeight && updatedUser.heightInches && updatedUser.age && updatedUser.sex && updatedUser.primaryGoal) {
-          const targets = calculateTargets(
-            {
-              currentWeight: updatedUser.currentWeight,
-              heightInches: updatedUser.heightInches,
-              age: updatedUser.age,
-              sex: updatedUser.sex,
-              activityLevel: activity,
-            },
-            updatedUser.primaryGoal
-          );
-
-          await prisma.user.update({
-            where: { id: user.id },
-            data: {
-              tdee: targets.tdee,
-              calorieTarget: targets.calorieTarget,
-              proteinTarget: targets.proteinTarget,
-              weeklyWorkoutTarget: targets.weeklyWorkoutTarget,
-            },
-          });
-
-          await updateStep(user.id, 'awaiting_target_confirm');
-          await sendSMS(
-            user.phone,
-            MESSAGES.confirmTargets(
-              targets.calorieTarget,
-              targets.proteinTarget,
-              GOAL_DISPLAY[updatedUser.primaryGoal]
-            )
-          );
-        }
-      } else {
-        await sendSMS(user.phone, MESSAGES.invalidActivity);
+      const activityMap: Record<number, 'sedentary' | 'light' | 'moderate' | 'active'> = {
+        1: 'sedentary',
+        2: 'light',
+        3: 'moderate',
+        4: 'active',
+      };
+      if (selection && activityMap[selection]) {
+        return { activityLevel: activityMap[selection] };
       }
       break;
     }
 
     case 'awaiting_target_confirm': {
-      // Accept any affirmative response
       const affirmatives = ['yes', 'yeah', 'yep', 'yup', 'sure', 'ok', 'okay', 'sounds good', 'good', 'y'];
       if (affirmatives.some(a => lowerInput.includes(a))) {
-        await updateStep(user.id, 'awaiting_restrictions');
-        await sendSMS(user.phone, MESSAGES.askRestrictions);
-      } else {
-        // For now, just proceed anyway - they can adjust in settings
-        await updateStep(user.id, 'awaiting_restrictions');
-        await sendSMS(user.phone, MESSAGES.askRestrictions);
+        return { targetsConfirmed: true };
       }
       break;
     }
 
     case 'awaiting_restrictions': {
-      let restrictions: string[] = [];
-      if (lowerInput !== 'none' && lowerInput !== 'no' && lowerInput !== 'n/a' && lowerInput !== 'na') {
-        // Parse comma-separated restrictions
-        restrictions = input
-          .split(/[,;]/)
-          .map(r => r.trim().toLowerCase())
-          .filter(r => r.length > 0);
+      if (lowerInput === 'none' || lowerInput === 'no' || lowerInput === 'n/a' || lowerInput === 'na') {
+        return { dietaryRestrictions: [] };
       }
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { dietaryRestrictions: restrictions },
-      });
-      await updateStep(user.id, 'awaiting_accountability');
-      await sendSMS(user.phone, MESSAGES.askAccountability);
+      // Parse comma-separated restrictions
+      const restrictions = input
+        .split(/[,;]/)
+        .map(r => r.trim().toLowerCase())
+        .filter(r => r.length > 0);
+      if (restrictions.length > 0) {
+        return { dietaryRestrictions: restrictions };
+      }
       break;
     }
 
     case 'awaiting_accountability': {
       const selection = isMenuSelection(input);
-      if (selection && selection >= 1 && selection <= 3) {
-        const level = ACCOUNTABILITY_MAP[selection];
-        await prisma.user.update({
-          where: { id: user.id },
-          data: {
-            accountabilityLevel: level,
-            onboardingComplete: true,
-          },
-        });
-
-        // Create default reminders based on accountability level
-        await createDefaultReminders(user.id, level);
-
-        await updateStep(user.id, 'complete');
-        await sendSMS(user.phone, MESSAGES.complete);
-      } else {
-        await sendSMS(user.phone, MESSAGES.invalidAccountability);
+      const levelMap: Record<number, 'light' | 'medium' | 'high'> = {
+        1: 'light',
+        2: 'medium',
+        3: 'high',
+      };
+      if (selection && levelMap[selection]) {
+        return { accountabilityLevel: levelMap[selection] };
       }
       break;
     }
+  }
 
-    case 'complete': {
-      // Should not reach here, but handle gracefully
-      // The message will be handled by the main router
-      break;
+  return null;
+}
+
+/**
+ * Handle escape commands
+ */
+async function handleEscapeCommand(
+  user: User,
+  command: string | null | undefined,
+  currentStep: OnboardingStep
+): Promise<boolean> {
+  if (!command) return false;
+
+  switch (command) {
+    case 'help':
+      await sendSMS(user.phone, MESSAGES.help);
+      return true;
+
+    case 'restart':
+      // Reset user data (keeping accountabilityLevel at default since it's required)
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          primaryGoal: null,
+          currentWeight: null,
+          heightInches: null,
+          age: null,
+          sex: null,
+          activityLevel: null,
+          dietaryRestrictions: [],
+          // accountabilityLevel has a default, don't reset it
+          calorieTarget: null,
+          proteinTarget: null,
+        },
+      });
+      await updateStep(user.id, 'awaiting_goal');
+      await sendOnboardingMessage(user.phone, 'awaiting_goal', "Let's start fresh!\n\n" + MESSAGES.firstQuestion);
+      return true;
+
+    case 'back':
+      // Go to previous step by resetting the current field
+      // This is a simplified approach - just tell them what info we have
+      const collected = buildCollectedData(user);
+      const summary = Object.entries(collected)
+        .filter(([, v]) => v !== null && v !== undefined)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('\n');
+
+      if (summary) {
+        await sendSMS(
+          user.phone,
+          `Here's what I have so far:\n${summary}\n\nWhat would you like to change? Or just continue answering to proceed.`
+        );
+      } else {
+        await sendSMS(user.phone, "You're at the beginning! Just answer to continue.");
+      }
+      return true;
+  }
+
+  return false;
+}
+
+/**
+ * Process onboarding message - main LLM-driven flow
+ */
+export async function processOnboardingMessage(
+  user: User,
+  message: string
+): Promise<void> {
+  const state = await getOrCreateOnboardingState(user.id);
+  const input = message.trim();
+
+  // Handle welcome response - any message moves to first question
+  if (state.currentStep === 'welcome') {
+    await updateStep(user.id, 'awaiting_goal');
+    await sendOnboardingMessage(user.phone, 'awaiting_goal', MESSAGES.firstQuestion);
+    return;
+  }
+
+  // If already complete, shouldn't be here
+  if (state.currentStep === 'complete') {
+    return;
+  }
+
+  // Build current context
+  const collectedData = buildCollectedData(user);
+
+  // Try LLM processing
+  let extractedFields: ExtractedFields = {};
+  let response: string;
+  let usedFallback = false;
+
+  try {
+    const aiResult = await processOnboardingWithAI(
+      user,
+      input,
+      state.currentStep,
+      collectedData
+    );
+
+    // Handle escape commands
+    if (aiResult.intent === 'escape_command') {
+      const handled = await handleEscapeCommand(user, aiResult.escapeCommand, state.currentStep);
+      if (handled) return;
     }
+
+    extractedFields = cleanExtractedFields(aiResult.extractedFields);
+    response = aiResult.response;
+  } catch (error) {
+    console.error('Onboarding AI processing failed:', error);
+
+    // Fall back to regex parsing
+    const fallbackFields = tryFallbackParsing(input, state.currentStep);
+    if (fallbackFields) {
+      extractedFields = fallbackFields;
+      usedFallback = true;
+    }
+
+    // Generate a simple response
+    response = "Got it!";
+  }
+
+  // If no fields extracted and we haven't used fallback, try fallback now
+  if (Object.keys(extractedFields).length === 0 && !usedFallback) {
+    const fallbackFields = tryFallbackParsing(input, state.currentStep);
+    if (fallbackFields) {
+      extractedFields = fallbackFields;
+    }
+  }
+
+  // Update user with extracted fields
+  let updatedUser = user;
+  if (Object.keys(extractedFields).length > 0) {
+    updatedUser = await updateUserWithFields(user.id, extractedFields);
+  }
+
+  // Rebuild collected data after update
+  const newCollectedData = buildCollectedData(updatedUser);
+  const missingFields = getMissingFields(newCollectedData);
+
+  // Check if we need to calculate and show targets
+  const needsTargetCalc =
+    updatedUser.currentWeight &&
+    updatedUser.heightInches &&
+    updatedUser.age &&
+    updatedUser.sex &&
+    updatedUser.activityLevel &&
+    updatedUser.primaryGoal &&
+    !newCollectedData.targetsConfirmed &&
+    !newCollectedData.calorieTarget;
+
+  if (needsTargetCalc) {
+    // Calculate targets
+    const targets = calculateTargets(
+      {
+        currentWeight: updatedUser.currentWeight!,
+        heightInches: updatedUser.heightInches!,
+        age: updatedUser.age!,
+        sex: updatedUser.sex!,
+        activityLevel: updatedUser.activityLevel!,
+      },
+      updatedUser.primaryGoal!
+    );
+
+    // Save targets
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        tdee: targets.tdee,
+        calorieTarget: targets.calorieTarget,
+        proteinTarget: targets.proteinTarget,
+        weeklyWorkoutTarget: targets.weeklyWorkoutTarget,
+      },
+    });
+
+    // Show target confirmation
+    await updateStep(user.id, 'awaiting_target_confirm');
+    const goalDisplay = updatedUser.primaryGoal ? GOAL_DISPLAY[updatedUser.primaryGoal] : 'your goal';
+    const confirmMsg = formatTargetConfirmation(targets.calorieTarget, targets.proteinTarget, goalDisplay);
+    await sendOnboardingMessage(user.phone, 'awaiting_target_confirm', confirmMsg);
+    return;
+  }
+
+  // Determine next step
+  const nextStep = determineStep(newCollectedData);
+  await updateStep(user.id, nextStep);
+
+  // Check for completion
+  if (nextStep === 'complete') {
+    // Mark complete
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { onboardingComplete: true },
+    });
+
+    // Create default reminders
+    const level = (updatedUser.accountabilityLevel as 'light' | 'medium' | 'high') || 'medium';
+    await createDefaultReminders(user.id, level);
+
+    // Send completion with confetti!
+    await sendSMSWithEffect(user.phone, MESSAGES.complete, 'confetti');
+    return;
+  }
+
+  // Send the AI response with step indicator
+  // If we used fallback or response is too short, enhance it
+  if (usedFallback || response.length < 20) {
+    const nextField = getNextField(newCollectedData);
+    response = getPromptForField(nextField);
+  }
+
+  await sendOnboardingMessage(user.phone, nextStep, response);
+}
+
+/**
+ * Get a prompt for a specific field
+ */
+function getPromptForField(field: string | null): string {
+  switch (field) {
+    case 'primaryGoal':
+      return MESSAGES.firstQuestion;
+    case 'currentWeight':
+      return "What's your current weight?";
+    case 'timezone':
+      return `What timezone are you in?
+
+1️⃣ Eastern
+2️⃣ Central
+3️⃣ Mountain
+4️⃣ Pacific
+
+(Or type your timezone like "Europe/London")`;
+    case 'heightInches':
+      return "And your height? (Like 5'10 or 70 inches)";
+    case 'age':
+      return "How old are you?";
+    case 'sex':
+      return "Male or female? (Just for calorie calculations)";
+    case 'activityLevel':
+      return `How active are you outside of workouts?
+
+1️⃣ Sedentary (desk job)
+2️⃣ Lightly active
+3️⃣ Moderately active
+4️⃣ Very active`;
+    case 'dietaryRestrictions':
+      return "Any dietary restrictions? (vegetarian, vegan, gluten-free, etc.) Reply 'none' if not.";
+    case 'accountabilityLevel':
+      return `Last one — how much accountability do you want?
+
+1️⃣ Light — Daily summary only
+2️⃣ Medium — Reminders if you miss meals (recommended)
+3️⃣ High — All reminders + morning/evening check-ins`;
+    default:
+      return "Let's continue!";
   }
 }
 
@@ -514,7 +729,10 @@ export async function checkAbandonedOnboarding(): Promise<void> {
     });
 
     if (!recentReminder) {
-      await sendSMS(state.user.phone, MESSAGES.resumePrompt);
+      await sendSMS(
+        state.user.phone,
+        "Hey! We didn't finish setting you up. Want to pick up where we left off? Just reply to continue, or say 'restart' to begin again."
+      );
     }
   }
 }

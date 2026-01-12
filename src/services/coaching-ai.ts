@@ -1,6 +1,11 @@
-import { User, PrimaryGoal } from '@prisma/client';
+import { User, PrimaryGoal, CoachingPersonality } from '@prisma/client';
 import prisma from '../lib/db';
-import anthropic, { CLAUDE_MODEL, MAX_TOKENS } from '../lib/claude';
+import anthropic, {
+  CLAUDE_MODEL,
+  MAX_TOKENS,
+  callClaudeWithRetry,
+  getUserFriendlyErrorMessage,
+} from '../lib/claude';
 import { sendSMS } from './sendblue';
 import { getTodayDate, percentage } from '../lib/calculations';
 
@@ -10,6 +15,26 @@ const GOAL_DISPLAY: Record<PrimaryGoal, string> = {
   muscle_gain: 'building muscle',
   recomp: 'body recomposition',
   general_health: 'general health',
+};
+
+// Personality-specific prompts
+const PERSONALITY_PROMPTS: Record<CoachingPersonality, { description: string; style: string }> = {
+  motivator: {
+    description: "You're an energetic, high-hype coach who celebrates everything. Think personal trainer energy.",
+    style: "Use exclamation points! Celebrate every win big or small. High energy, lots of encouragement. 'You crushed it!' 'That's amazing!' 'Let's GO!' Energy is your superpower.",
+  },
+  educator: {
+    description: "You're a knowledgeable coach who teaches the 'why' behind nutrition and fitness. Science-based but accessible.",
+    style: "Explain the reasoning when giving advice. Reference basic nutrition science. 'Protein helps rebuild muscle fibers...' 'Your body stores excess calories as...' Educational but not preachy.",
+  },
+  coach: {
+    description: "You're a professional, balanced coach. Data-focused but warm. Think supportive athletic coach.",
+    style: "Direct and efficient. Focus on the numbers and progress. Acknowledge feelings but keep focus on actions. 'You're 80% to your protein goal. Solid.' Professional warmth.",
+  },
+  friend: {
+    description: "You're a supportive friend who happens to know about fitness. Casual, relatable, no judgment.",
+    style: "Super casual tone. 'lol no worries', 'honestly same', 'dude nice'. Like texting a friend. Emojis welcome. Validate feelings. Zero judgment ever.",
+  },
 };
 
 /**
@@ -90,8 +115,15 @@ async function buildSystemPrompt(user: User): Promise<string> {
     patterns.push('Frequently over on calories');
   }
 
+  // Get personality-specific instructions
+  const personality = user.coachingPersonality || 'coach';
+  const personalityPrompt = PERSONALITY_PROMPTS[personality];
+
   return `ROLE:
-You are FitText, an SMS-based fitness and nutrition coach. You're supportive, knowledgeable, and conversational. Keep messages concise (SMS-friendly, under 300 chars when possible) but warm. Never shame or guilt — focus on progress, not perfection.
+You are FitText, an SMS-based fitness and nutrition coach. ${personalityPrompt.description} Keep messages concise (SMS-friendly, under 300 chars when possible). Never shame or guilt — focus on progress, not perfection.
+
+COACHING STYLE:
+${personalityPrompt.style}
 
 USER CONTEXT:
 - Goal: ${user.primaryGoal ? GOAL_DISPLAY[user.primaryGoal] : 'Not set'}
@@ -136,27 +168,32 @@ export async function handleQuestion(
 ): Promise<void> {
   const systemPrompt = await buildSystemPrompt(user);
 
-  try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: MAX_TOKENS.question,
-      system: systemPrompt,
-      messages: [
-        {
-          role: 'user',
-          content: question,
-        },
-      ],
-    });
+  const result = await callClaudeWithRetry(
+    () =>
+      anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: MAX_TOKENS.question,
+        system: systemPrompt,
+        messages: [
+          {
+            role: 'user',
+            content: question,
+          },
+        ],
+      }),
+    { label: 'Coaching question' }
+  );
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  if (!result.success) {
+    await sendSMS(user.phone, getUserFriendlyErrorMessage(result.error!));
+    return;
+  }
+
+  const text = result.data!.content[0].type === 'text' ? result.data!.content[0].text : '';
+  if (text) {
     await sendSMS(user.phone, text);
-  } catch (error) {
-    console.error('Coaching AI error:', error);
-    await sendSMS(
-      user.phone,
-      "I'm having trouble processing that right now. Can you try rephrasing?"
-    );
+  } else {
+    await sendSMS(user.phone, "I'm not sure how to answer that. Can you rephrase?");
   }
 }
 
@@ -200,6 +237,87 @@ export async function handleGreeting(user: User): Promise<void> {
 }
 
 /**
+ * Detect setback phrases in a message
+ */
+function detectSetback(message: string): 'emotional_setback' | 'mild_setback' | null {
+  const lower = message.toLowerCase();
+
+  // Emotional setback phrases (need empathetic response)
+  const emotionalPhrases = [
+    'fell off',
+    'gave up',
+    'failed',
+    'binge',
+    'binged',
+    'binging',
+    'ate everything',
+    'ruined',
+    'blew it',
+    'hate myself',
+    'feel terrible',
+    'feel awful',
+    'so frustrated',
+    'can\'t do this',
+    'giving up',
+    'what\'s the point',
+    'stressed eating',
+    'emotional eating',
+  ];
+
+  for (const phrase of emotionalPhrases) {
+    if (lower.includes(phrase)) {
+      return 'emotional_setback';
+    }
+  }
+
+  // Mild setback phrases (acknowledgment + encouragement)
+  const mildPhrases = [
+    'messed up',
+    'screwed up',
+    'went overboard',
+    'overdid it',
+    'had a bad day',
+    'cheated',
+    'cheat day',
+    'didn\'t log',
+    'forgot to log',
+    'skipped',
+    'fell behind',
+    'slipped',
+  ];
+
+  for (const phrase of mildPhrases) {
+    if (lower.includes(phrase)) {
+      return 'mild_setback';
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Get empathetic response for setback
+ */
+function getSetbackResponse(type: 'emotional_setback' | 'mild_setback'): string {
+  if (type === 'emotional_setback') {
+    const responses = [
+      "That happens. Rest days (even unplanned ones) are part of the process. What triggered it?",
+      "Hey, it's okay. One day doesn't undo all your progress. Want to talk about what's going on?",
+      "I hear you. Setbacks are human. The fact that you're reaching out shows you're still in this. What happened?",
+      "No judgment here. Everyone has these moments. What's on your mind?",
+    ];
+    return responses[Math.floor(Math.random() * responses.length)];
+  } else {
+    const responses = [
+      "That's okay — one day doesn't define your journey. What would help you get back on track?",
+      "Everyone has those days. What matters is you're here now. Ready to keep going?",
+      "No stress. Let's just focus on the next meal. What sounds good?",
+    ];
+    return responses[Math.floor(Math.random() * responses.length)];
+  }
+}
+
+/**
  * Handle freeform messages (venting, thanks, etc.)
  */
 export async function handleFreeform(
@@ -207,6 +325,13 @@ export async function handleFreeform(
   message: string
 ): Promise<void> {
   const lower = message.toLowerCase();
+
+  // Check for setback phrases first
+  const setbackType = detectSetback(message);
+  if (setbackType) {
+    await sendSMS(user.phone, getSetbackResponse(setbackType));
+    return;
+  }
 
   // Quick responses for common phrases
   if (lower.includes('thank') || lower === 'thanks' || lower === 'ty') {
@@ -222,23 +347,32 @@ export async function handleFreeform(
   // For anything else, use the coaching AI
   const systemPrompt = await buildSystemPrompt(user);
 
-  try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: MAX_TOKENS.coaching,
-      system: systemPrompt + `\n\nThe user is sharing something casually. Respond warmly and briefly. If they seem to be venting or struggling, acknowledge their feelings.`,
-      messages: [
-        {
-          role: 'user',
-          content: message,
-        },
-      ],
-    });
+  const result = await callClaudeWithRetry(
+    () =>
+      anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: MAX_TOKENS.coaching,
+        system: systemPrompt + `\n\nThe user is sharing something casually. Respond warmly and briefly. If they seem to be venting or struggling, acknowledge their feelings.`,
+        messages: [
+          {
+            role: 'user',
+            content: message,
+          },
+        ],
+      }),
+    { label: 'Freeform coaching' }
+  );
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  if (!result.success) {
+    // For freeform, use a softer fallback message
+    await sendSMS(user.phone, "I hear you! Let me know if there's anything I can help with.");
+    return;
+  }
+
+  const text = result.data!.content[0].type === 'text' ? result.data!.content[0].text : '';
+  if (text) {
     await sendSMS(user.phone, text);
-  } catch (error) {
-    console.error('Freeform response error:', error);
+  } else {
     await sendSMS(user.phone, "I hear you! Let me know if there's anything I can help with.");
   }
 }

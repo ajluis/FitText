@@ -1,14 +1,34 @@
 import { config, SENDBLUE_RATE_LIMIT_MS } from '../config';
+import { fetchWithTimeout, TimeoutError } from '../lib/fetch-with-timeout';
+import { withRetry, isRetryableStatus } from '../lib/retry';
 
 const SENDBLUE_API_URL = 'https://api.sendblue.co/api/send-message';
+const SENDBLUE_TIMEOUT_MS = 15000; // 15 second timeout for SMS API
 
 // Track last message time per user for rate limiting
 const lastMessageTime = new Map<string, number>();
 
+// Sendblue expressive message effects (iMessage only)
+export type SendStyle =
+  | 'default'
+  | 'invisible'
+  | 'celebration'
+  | 'shooting_star'
+  | 'fireworks'
+  | 'lasers'
+  | 'love'
+  | 'confetti'
+  | 'balloons'
+  | 'spotlight'
+  | 'echo'
+  | 'gentle'
+  | 'loud'
+  | 'slam';
+
 interface SendMessageOptions {
   number: string;
   content: string;
-  sendStyle?: 'default' | 'invisible';
+  sendStyle?: SendStyle;
   mediaUrl?: string;
 }
 
@@ -34,51 +54,75 @@ export async function sendMessage(options: SendMessageOptions): Promise<SendMess
     await new Promise(resolve => setTimeout(resolve, waitTime));
   }
 
-  try {
-    const body: Record<string, string> = {
-      number,
-      content,
-      send_style: sendStyle,
-      from_number: config.sendblue.phoneNumber,
-    };
+  const body: Record<string, string> = {
+    number,
+    content,
+    send_style: sendStyle,
+    from_number: config.sendblue.phoneNumber,
+  };
 
-    if (mediaUrl) {
-      body.media_url = mediaUrl;
-    }
+  if (mediaUrl) {
+    body.media_url = mediaUrl;
+  }
 
-    const response = await fetch(SENDBLUE_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'sb-api-key-id': config.sendblue.apiKey,
-        'sb-api-secret-key': config.sendblue.apiSecret,
+  // Use retry with exponential backoff
+  const result = await withRetry(
+    async () => {
+      const response = await fetchWithTimeout(SENDBLUE_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'sb-api-key-id': config.sendblue.apiKey,
+          'sb-api-secret-key': config.sendblue.apiSecret,
+        },
+        body: JSON.stringify(body),
+        timeoutMs: SENDBLUE_TIMEOUT_MS,
+      });
+
+      lastMessageTime.set(number, Date.now());
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const error = new Error(`Sendblue API error: ${response.status} - ${errorText}`);
+        // Add status to error for retry logic
+        (error as Error & { status?: number }).status = response.status;
+
+        // Only throw (to trigger retry) for retryable status codes
+        if (isRetryableStatus(response.status)) {
+          throw error;
+        }
+
+        // Non-retryable error (4xx client errors)
+        console.error('Sendblue API error (non-retryable):', response.status, errorText);
+        return { success: false, error: `API error: ${response.status}` };
+      }
+
+      const data = await response.json() as { message_id?: string };
+      return { success: true, messageId: data.message_id };
+    },
+    {
+      maxAttempts: 3,
+      initialDelayMs: 1000,
+      retryOn: (error) => {
+        // Retry on timeout errors
+        if (error instanceof TimeoutError) return true;
+        // Retry on server errors (5xx) or rate limits (429)
+        const status = (error as Error & { status?: number }).status;
+        return status ? isRetryableStatus(status) : true;
       },
-      body: JSON.stringify(body),
-    });
-
-    lastMessageTime.set(number, Date.now());
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Sendblue API error:', response.status, errorText);
-      return {
-        success: false,
-        error: `API error: ${response.status}`,
-      };
     }
+  );
 
-    const data = await response.json() as { message_id?: string };
-    return {
-      success: true,
-      messageId: data.message_id,
-    };
-  } catch (error) {
-    console.error('Sendblue send error:', error);
+  if (!result.success) {
+    const errorMsg = result.error?.message || 'Unknown error';
+    console.error(`Sendblue send failed after ${result.attempts} attempts:`, errorMsg);
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: errorMsg,
     };
   }
+
+  return result.data ?? { success: false, error: 'No response data' };
 }
 
 /**
@@ -89,6 +133,28 @@ export async function sendSMS(phone: string, message: string): Promise<boolean> 
 
   if (!result.success) {
     console.error(`Failed to send SMS to ${phone}:`, result.error);
+  }
+
+  return result.success;
+}
+
+/**
+ * Send a message with an expressive effect (iMessage only, degrades gracefully on SMS)
+ * Use for celebrations and milestones!
+ */
+export async function sendSMSWithEffect(
+  phone: string,
+  message: string,
+  effect: SendStyle
+): Promise<boolean> {
+  const result = await sendMessage({
+    number: phone,
+    content: message,
+    sendStyle: effect,
+  });
+
+  if (!result.success) {
+    console.error(`Failed to send SMS with effect to ${phone}:`, result.error);
   }
 
   return result.success;

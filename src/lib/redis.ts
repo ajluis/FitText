@@ -14,4 +14,11 @@ if (process.env.NODE_ENV !== 'production') {
   globalForRedis.redis = redis;
 }
 
+/**
+ * Get the Redis connection for health checks
+ */
+export function getRedisConnection(): Redis | null {
+  return globalForRedis.redis ?? redis;
+}
+
 export default redis;

@@ -1,4 +1,4 @@
-import { User, SettingsMenu, PrimaryGoal, ActivityLevel, WeekDay, AccountabilityLevel } from '@prisma/client';
+import { User, SettingsMenu, PrimaryGoal, ActivityLevel, WeekDay, AccountabilityLevel, CoachingPersonality } from '@prisma/client';
 import prisma from '../lib/db';
 import { sendSMS } from '../services/sendblue';
 import { isMenuSelection, isExitCommand } from '../services/message-router';
@@ -58,6 +58,20 @@ const ACCOUNTABILITY_MAP: Record<number, AccountabilityLevel> = {
   1: 'light',
   2: 'medium',
   3: 'high',
+};
+
+const PERSONALITY_DISPLAY: Record<CoachingPersonality, string> = {
+  motivator: 'Motivator (High energy, hype)',
+  educator: 'Educator (Science-based)',
+  coach: 'Coach (Balanced, data-focused)',
+  friend: 'Friend (Casual, relatable)',
+};
+
+const PERSONALITY_MAP: Record<number, CoachingPersonality> = {
+  1: 'motivator',
+  2: 'educator',
+  3: 'coach',
+  4: 'friend',
 };
 
 /**
@@ -132,6 +146,70 @@ export async function enterSettings(user: User): Promise<void> {
   });
 
   await sendSMS(user.phone, getMainMenu());
+}
+
+/**
+ * Enter settings at a specific menu (for shortcuts like /settings goals)
+ */
+export async function enterSettingsAt(user: User, menuName: string): Promise<void> {
+  const lower = menuName.toLowerCase().trim();
+
+  // Map shorthand names to menu values
+  const menuMap: Record<string, SettingsMenu> = {
+    'goals': 'goals',
+    'goal': 'goals',
+    'targets': 'goals',
+    'reminders': 'reminders',
+    'reminder': 'reminders',
+    'notifications': 'reminders',
+    'stats': 'stats',
+    'profile': 'profile',
+    'restrictions': 'restrictions',
+    'dietary': 'restrictions',
+    'diet': 'restrictions',
+  };
+
+  const targetMenu = menuMap[lower] || 'main';
+
+  await prisma.settingsState.upsert({
+    where: { userId: user.id },
+    create: {
+      userId: user.id,
+      inSettings: true,
+      currentMenu: targetMenu,
+    },
+    update: {
+      inSettings: true,
+      currentMenu: targetMenu,
+      awaitingInputFor: null,
+      enteredAt: new Date(),
+    },
+  });
+
+  // Send the appropriate menu
+  switch (targetMenu) {
+    case 'goals':
+      await sendSMS(user.phone, getGoalsMenu(user));
+      break;
+    case 'reminders':
+      await sendSMS(user.phone, getRemindersMenu(user));
+      break;
+    case 'stats':
+      await sendSMS(user.phone, getStatsMenu(user));
+      break;
+    case 'profile':
+      await sendSMS(user.phone, getProfileView(user));
+      break;
+    case 'restrictions':
+      await sendSMS(user.phone, `Current dietary restrictions: ${user.dietaryRestrictions.length > 0 ? user.dietaryRestrictions.join(', ') : 'None'}
+
+Enter your dietary restrictions (comma-separated), or 'none' to clear:
+
+Examples: vegetarian, gluten-free, dairy-free, nut allergy`);
+      break;
+    default:
+      await sendSMS(user.phone, getMainMenu());
+  }
 }
 
 /**
@@ -211,7 +289,8 @@ function getMainMenu(): string {
 2️⃣ Reminders & check-ins
 3️⃣ Update my stats
 4️⃣ Dietary restrictions
-5️⃣ View my profile
+5️⃣ Coaching style
+6️⃣ View my profile
 
 Reply with a number, or 'done' to exit.`;
 }
@@ -317,12 +396,35 @@ Enter your dietary restrictions (comma-separated), or 'none' to clear:
 Examples: vegetarian, gluten-free, dairy-free, nut allergy`);
       break;
     case 5:
+      await updateSettingsState(user.id, { awaitingInputFor: 'coaching_personality' });
+      await sendSMS(user.phone, getCoachingStyleMenu(user));
+      break;
+    case 6:
       await updateSettingsState(user.id, { currentMenu: 'profile' });
       await sendSMS(user.phone, getProfileView(user));
       break;
     default:
-      await sendSMS(user.phone, "I didn't catch that. Reply with a number 1-5, or 'done' to exit.");
+      await sendSMS(user.phone, "I didn't catch that. Reply with a number 1-6, or 'done' to exit.");
   }
+}
+
+/**
+ * Get coaching style menu
+ */
+function getCoachingStyleMenu(user: User): string {
+  const current = PERSONALITY_DISPLAY[user.coachingPersonality || 'coach'];
+  return `⚙️ Coaching Style
+
+Current: ${current}
+
+How should I talk to you?
+
+1️⃣ Motivator — High energy, celebrate everything
+2️⃣ Educator — Teach the why, science-based
+3️⃣ Coach — Balanced, data-focused (default)
+4️⃣ Friend — Casual, relatable, like a friend
+
+Reply with a number, or 'back' to return.`;
 }
 
 async function handleGoalsMenu(user: User, selection: number | null, input: string): Promise<void> {
@@ -781,6 +883,43 @@ Your new targets:
         if (updatedUser) await sendSMS(updatedUser.phone, getStatsMenu(updatedUser));
       } else {
         await sendSMS(user.phone, "Please reply with a number 1-4.");
+      }
+      break;
+    }
+
+    case 'coaching_personality': {
+      if (lower === 'back') {
+        await updateSettingsState(user.id, { awaitingInputFor: null, currentMenu: 'main' });
+        await sendSMS(user.phone, getMainMenu());
+        return;
+      }
+
+      const selection = isMenuSelection(input);
+      if (selection && selection >= 1 && selection <= 4) {
+        const personality = PERSONALITY_MAP[selection];
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { coachingPersonality: personality },
+        });
+
+        const personalityNames: Record<CoachingPersonality, string> = {
+          motivator: 'Motivator',
+          educator: 'Educator',
+          coach: 'Coach',
+          friend: 'Friend',
+        };
+        const confirmMessages: Record<CoachingPersonality, string> = {
+          motivator: "Let's GO! 🔥 Ready to crush it together!",
+          educator: "I'll help you understand the science behind your progress.",
+          coach: "Solid choice. Let's focus on the data and keep improving.",
+          friend: "hey, sounds good! we got this 😊",
+        };
+
+        await sendSMS(user.phone, `Coaching style updated to ${personalityNames[personality]}. ${confirmMessages[personality]}`);
+        await updateSettingsState(user.id, { awaitingInputFor: null, currentMenu: 'main' });
+        await sendSMS(user.phone, getMainMenu());
+      } else {
+        await sendSMS(user.phone, "Please reply with a number 1-4, or 'back'.");
       }
       break;
     }

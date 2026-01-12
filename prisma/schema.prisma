@@ -88,6 +88,7 @@ enum OnboardingStep {
   welcome
   awaiting_goal
   awaiting_weight
+  awaiting_timezone
   awaiting_height
   awaiting_age
   awaiting_sex
@@ -110,6 +111,13 @@ enum SettingsMenu {
 enum TimeOfDay {
   morning
   other
+}
+
+enum CoachingPersonality {
+  motivator  // High energy, hype, celebrate everything
+  educator   // Teach the why, science-based
+  coach      // Professional, balanced, data-focused (default)
+  friend     // Casual, relatable, conversational
 }
 
 // ============================================
@@ -168,6 +176,9 @@ model User {
   // Pause state
   remindersPaused        Boolean             @default(false)
   remindersPausedUntil   DateTime?
+
+  // Coaching Style
+  coachingPersonality    CoachingPersonality @default(coach)
 
   // Relations
   dailyLogs              DailyLog[]

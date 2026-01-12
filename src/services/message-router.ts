@@ -32,6 +32,10 @@ const COMMANDS = [
   '/help',
   '/pause',
   '/resume',
+  '/goals',
+  '/weight',
+  '/macros',
+  '/status',
 ] as const;
 
 // Quick patterns for fast classification (before LLM)

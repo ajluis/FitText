@@ -1,6 +1,9 @@
 import { config } from '../config';
+import { fetchWithTimeout } from './fetch-with-timeout';
+import { withRetry, isRetryableStatus } from './retry';
 
 const USDA_BASE_URL = 'https://api.nal.usda.gov/fdc/v1';
+const USDA_TIMEOUT_MS = 10000; // 10 second timeout for USDA API
 
 export interface USDAFood {
   fdcId: number;
@@ -47,33 +50,57 @@ export interface NutritionInfo {
 }
 
 /**
- * Search USDA database for foods
+ * Search USDA database for foods with retry and timeout
  */
 export async function searchFoods(query: string, pageSize = 5): Promise<USDAFood[]> {
-  try {
-    const response = await fetch(`${USDA_BASE_URL}/foods/search?api_key=${config.usda.apiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query,
-        pageSize,
-        dataType: ['Foundation', 'SR Legacy', 'Branded'],
-        sortBy: 'dataType.keyword',
-        sortOrder: 'asc',
-      }),
-    });
+  const result = await withRetry(
+    async () => {
+      const response = await fetchWithTimeout(
+        `${USDA_BASE_URL}/foods/search?api_key=${config.usda.apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query,
+            pageSize,
+            dataType: ['Foundation', 'SR Legacy', 'Branded'],
+            sortBy: 'dataType.keyword',
+            sortOrder: 'asc',
+          }),
+          timeoutMs: USDA_TIMEOUT_MS,
+        }
+      );
 
-    if (!response.ok) {
-      console.error('USDA API error:', response.status, await response.text());
-      return [];
+      if (!response.ok) {
+        const errorText = await response.text();
+        const error = new Error(`USDA API error: ${response.status} - ${errorText}`);
+        (error as Error & { status?: number }).status = response.status;
+
+        // Only throw (to trigger retry) for retryable status codes
+        if (isRetryableStatus(response.status)) {
+          throw error;
+        }
+
+        // Non-retryable error
+        console.error('USDA API error (non-retryable):', response.status, errorText);
+        return [];
+      }
+
+      const data = await response.json() as USDASearchResult;
+      return data.foods || [];
+    },
+    {
+      maxAttempts: 2, // Fewer retries for USDA since it's not critical
+      initialDelayMs: 500,
     }
+  );
 
-    const data = await response.json() as USDASearchResult;
-    return data.foods || [];
-  } catch (error) {
-    console.error('USDA search error:', error);
+  if (!result.success) {
+    console.error(`USDA search failed after ${result.attempts} attempts:`, result.error?.message);
     return [];
   }
+
+  return result.data ?? [];
 }
 
 /**

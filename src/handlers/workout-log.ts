@@ -364,23 +364,26 @@ async function getWeeklyWorkoutCount(user: User): Promise<number> {
   return count;
 }
 
-/**
- * Check for PR (personal record)
- */
-async function checkForPR(
-  user: User,
-  exerciseName: string,
-  sets: ExerciseSet[]
-): Promise<{ isPR: boolean; previousBest?: string } | null> {
-  // Get the best set from current workout
-  const currentBest = sets.reduce((best, set) => {
-    const score = set.weight * set.reps;
-    const bestScore = best.weight * best.reps;
-    return score > bestScore ? set : best;
-  }, sets[0]);
+interface PRCheckResult {
+  exerciseName: string;
+  isPR: boolean;
+  currentBest: ExerciseSet;
+  previousBest?: string;
+}
 
-  // Look for previous entries with this exercise
-  // Note: JSON path queries vary by database, so we'll fetch and filter in memory
+/**
+ * Check for PRs across all exercises in a workout (single query optimization)
+ * This replaces the old N+1 query pattern where we fetched workout history for each exercise
+ */
+async function checkAllPRs(
+  user: User,
+  exercises: Exercise[]
+): Promise<PRCheckResult[]> {
+  if (!exercises || exercises.length === 0) {
+    return [];
+  }
+
+  // Single query to fetch workout history (instead of N queries)
   const previousEntries = await prisma.workoutEntry.findMany({
     where: {
       userId: user.id,
@@ -390,42 +393,59 @@ async function checkForPR(
     take: 50,
   });
 
-  if (previousEntries.length === 0) {
-    return null; // First time doing this exercise
-  }
-
-  // Find previous best
-  let previousBestSet: ExerciseSet | null = null;
-  let previousBestScore = 0;
+  // Build a map of best scores for each exercise from history
+  const bestScoresByExercise = new Map<string, { score: number; set: ExerciseSet }>();
 
   for (const entry of previousEntries) {
-    const exercises = entry.exercises as Exercise[] | null;
-    if (!exercises) continue;
+    const entryExercises = entry.exercises as Exercise[] | null;
+    if (!entryExercises) continue;
 
-    for (const exercise of exercises) {
-      if (exercise.name.toLowerCase() === exerciseName.toLowerCase()) {
-        for (const set of exercise.sets) {
-          const score = set.weight * set.reps;
-          if (score > previousBestScore) {
-            previousBestScore = score;
-            previousBestSet = set;
-          }
+    for (const exercise of entryExercises) {
+      const name = exercise.name.toLowerCase();
+
+      for (const set of exercise.sets) {
+        const score = set.weight * set.reps;
+        const current = bestScoresByExercise.get(name);
+
+        if (!current || score > current.score) {
+          bestScoresByExercise.set(name, { score, set });
         }
       }
     }
   }
 
-  if (!previousBestSet) return null;
+  // Check each exercise in current workout against history
+  const results: PRCheckResult[] = [];
 
-  const currentScore = currentBest.weight * currentBest.reps;
-  if (currentScore > previousBestScore) {
-    return {
-      isPR: true,
-      previousBest: `${previousBestSet.weight}×${previousBestSet.reps}`,
-    };
+  for (const exercise of exercises) {
+    if (!exercise.sets || exercise.sets.length === 0) continue;
+
+    // Get current best set
+    const currentBest = exercise.sets.reduce((best, set) => {
+      const score = set.weight * set.reps;
+      const bestScore = best.weight * best.reps;
+      return score > bestScore ? set : best;
+    }, exercise.sets[0]);
+
+    const currentScore = currentBest.weight * currentBest.reps;
+    const previousBestData = bestScoresByExercise.get(exercise.name.toLowerCase());
+
+    if (!previousBestData) {
+      // First time doing this exercise - could count as PR
+      continue;
+    }
+
+    if (currentScore > previousBestData.score) {
+      results.push({
+        exerciseName: exercise.name,
+        isPR: true,
+        currentBest,
+        previousBest: `${previousBestData.set.weight}×${previousBestData.set.reps}`,
+      });
+    }
   }
 
-  return { isPR: false };
+  return results;
 }
 
 /**
@@ -473,18 +493,14 @@ export async function handleWorkoutLog(
   // Format response
   let response = formatWorkoutResponse(parsed, weeklyCount, user.weeklyWorkoutTarget);
 
-  // Check for PRs
+  // Check for PRs (single optimized query instead of N queries)
   if (parsed.exercises && parsed.exercises.length > 0) {
-    for (const exercise of parsed.exercises) {
-      const prCheck = await checkForPR(user, exercise.name, exercise.sets);
-      if (prCheck?.isPR) {
-        const bestSet = exercise.sets.reduce((a, b) =>
-          a.weight * a.reps > b.weight * b.reps ? a : b
-        );
-        response += `\n\n${exercise.name}: ${bestSet.weight}×${bestSet.reps} — that's a PR! 🎉`;
-        if (prCheck.previousBest) {
-          response += ` (up from ${prCheck.previousBest})`;
-        }
+    const prResults = await checkAllPRs(user, parsed.exercises);
+
+    for (const pr of prResults) {
+      response += `\n\n${pr.exerciseName}: ${pr.currentBest.weight}×${pr.currentBest.reps} — that's a PR! 🎉`;
+      if (pr.previousBest) {
+        response += ` (up from ${pr.previousBest})`;
       }
     }
   }

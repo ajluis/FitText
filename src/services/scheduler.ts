@@ -638,6 +638,27 @@ async function sendWeeklySummary(user: { id: string; phone: string; timezone: st
     highlights.push(`${user.loggingStreakDays}-day logging streak`);
   }
 
+  // Monthly consistency celebration (non-consecutive days)
+  const monthAgo = new Date(today);
+  monthAgo.setDate(today.getDate() - 28);
+  const monthlyLogs = await prisma.dailyLog.findMany({
+    where: {
+      userId: user.id,
+      date: {
+        gte: monthAgo,
+      },
+      caloriesTotal: { gt: 0 },
+    },
+  });
+
+  const monthlyDaysLogged = monthlyLogs.length;
+  const monthlyPercentage = Math.round((monthlyDaysLogged / 28) * 100);
+  if (monthlyDaysLogged >= 20) {
+    highlights.push(`${monthlyDaysLogged}/28 days logged this month (${monthlyPercentage}%) — real consistency!`);
+  } else if (monthlyDaysLogged >= 14 && monthlyDaysLogged < 20) {
+    highlights.push(`${monthlyDaysLogged} days logged this month — building consistency!`);
+  }
+
   if (highlights.length > 0) {
     message += '\n🔥 Highlights:\n';
     for (const h of highlights) {

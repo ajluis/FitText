@@ -1,6 +1,6 @@
 import { User, Prisma } from '@prisma/client';
 import prisma from '../lib/db';
-import { sendSMS } from '../services/sendblue';
+import { sendSMS, sendSMSWithEffect, SendStyle } from '../services/sendblue';
 import { getTodayDate, parseWeight } from '../lib/calculations';
 
 /**
@@ -131,6 +131,101 @@ export async function confirmWeightLog(
   }
 
   await sendSMS(user.phone, response);
+
+  // Check for weight milestones (send as separate message after a delay with effect)
+  const milestone = await checkWeightMilestones(user, weight);
+  if (milestone) {
+    setTimeout(async () => {
+      await sendSMSWithEffect(user.phone, milestone.message, milestone.effect);
+    }, 2000);
+  }
+}
+
+interface WeightMilestone {
+  message: string;
+  effect: SendStyle;
+}
+
+/**
+ * Check for weight milestones and return celebration message with effect
+ */
+async function checkWeightMilestones(user: User, currentWeight: number): Promise<WeightMilestone | null> {
+  // Get first weight entry as starting point
+  const firstEntry = await prisma.weightEntry.findFirst({
+    where: { userId: user.id },
+    orderBy: { date: 'asc' },
+  });
+
+  if (!firstEntry) return null;
+
+  const startWeight = firstEntry.weight;
+  const changeFromStart = startWeight - currentWeight; // Positive = loss, negative = gain
+  const absChange = Math.abs(changeFromStart);
+
+  // Check for goal proximity
+  if (user.targetWeight) {
+    const toGoal = Math.abs(currentWeight - user.targetWeight);
+
+    if (currentWeight === user.targetWeight) {
+      // Hit goal weight - FIREWORKS!
+      return {
+        message: `🎉 You hit your goal weight of ${user.targetWeight} lbs! Incredible achievement. Time to set a new goal?`,
+        effect: 'fireworks',
+      };
+    } else if (toGoal <= 5 && toGoal > 0) {
+      return {
+        message: `You're within 5 lbs of your goal (${user.targetWeight} lbs). So close! 🎯`,
+        effect: 'shooting_star',
+      };
+    }
+  }
+
+  // Check for milestone losses (only celebrate loss milestones for now)
+  if (changeFromStart > 0) {
+    // Losing weight
+    const milestones = [5, 10, 15, 20, 25, 30, 40, 50];
+
+    for (const milestone of milestones.reverse()) {
+      if (absChange >= milestone) {
+        // Check if we already celebrated this milestone
+        const previousEntry = await prisma.weightEntry.findFirst({
+          where: {
+            userId: user.id,
+            date: { lt: getTodayDate(user.timezone) },
+          },
+          orderBy: { date: 'desc' },
+        });
+
+        const prevChangeFromStart = previousEntry ? startWeight - previousEntry.weight : 0;
+
+        if (prevChangeFromStart < milestone) {
+          // Just crossed this milestone!
+          // Major milestones (20+ lbs) get celebration, smaller get confetti
+          const effect: SendStyle = milestone >= 20 ? 'celebration' : 'confetti';
+          return {
+            message: `🎉 That's ${milestone} lbs down from where you started (${startWeight} lbs)! ${getMilestoneMotivation(milestone)}`,
+            effect,
+          };
+        }
+        break;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Get motivational message for weight milestone
+ */
+function getMilestoneMotivation(lbsLost: number): string {
+  if (lbsLost >= 50) return "Life-changing progress. You should be incredibly proud.";
+  if (lbsLost >= 30) return "You've transformed. The discipline is paying off.";
+  if (lbsLost >= 20) return "Major milestone. This is real, lasting change.";
+  if (lbsLost >= 15) return "Significant progress. You're doing the work.";
+  if (lbsLost >= 10) return "Double digits! Keep this momentum going.";
+  if (lbsLost >= 5) return "First milestone hit. You're on your way!";
+  return "Keep it up!";
 }
 
 /**

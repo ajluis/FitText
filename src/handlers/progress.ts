@@ -1,6 +1,7 @@
 import { User } from '@prisma/client';
 import prisma from '../lib/db';
 import { getTodayDate, percentage } from '../lib/calculations';
+import { getAdherenceMetrics, getUserInsights, formatInsightsForSMS } from '../services/analytics';
 
 /**
  * Get comprehensive progress summary
@@ -15,6 +16,15 @@ export async function getProgressSummary(user: User): Promise<string> {
   // Trends section
   const trends = await getTrendsSection(user);
   response += trends + '\n\n';
+
+  // Adherence section
+  const adherence = await getAdherenceMetrics(user, 30);
+  if (adherence.daysAnalyzed >= 7) {
+    response += `📋 Adherence (30 days)\n`;
+    response += `• Calorie target: ${adherence.calorieAdherence}% of days\n`;
+    response += `• Protein target: ${adherence.proteinAdherence}% of days\n`;
+    response += `• Overall score: ${adherence.overallScore}/100\n\n`;
+  }
 
   // Streak
   response += `🔥 Streak: ${user.loggingStreakDays} days`;
@@ -191,14 +201,9 @@ function formatDate(date: Date): string {
 }
 
 /**
- * Get detailed analytics for power users (future feature)
+ * Get detailed analytics for power users
  */
 export async function getDetailedAnalytics(user: User): Promise<string> {
-  // This could include:
-  // - Calorie/protein adherence over time
-  // - Best/worst days
-  // - Pattern analysis
-  // - Workout volume trends
-  // For now, return the basic summary
-  return getProgressSummary(user);
+  const insights = await getUserInsights(user, 30);
+  return formatInsightsForSMS(insights);
 }
