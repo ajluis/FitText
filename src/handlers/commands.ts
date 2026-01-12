@@ -79,6 +79,11 @@ export async function handleCommand(
       await sendSMS(user.phone, status);
       break;
 
+    case '/yesterday':
+      const yesterday = await getYesterdaySummary(user);
+      await sendSMS(user.phone, yesterday);
+      break;
+
     default:
       await sendSMS(
         user.phone,
@@ -96,6 +101,7 @@ function getHelpMessage(): string {
 Quick access:
 /status — Quick snapshot (streak, today, week)
 /macros — Today's calories & protein
+/yesterday — What you ate yesterday
 /weight — Weight progress
 /goals — Jump to goals settings
 
@@ -393,6 +399,83 @@ async function getQuickStatus(user: User): Promise<string> {
   response += `\n\nWeek: ${workoutsThisWeek}/${user.weeklyWorkoutTarget} workouts`;
   if (workoutsThisWeek >= user.weeklyWorkoutTarget) {
     response += ` ✓`;
+  }
+
+  return response;
+}
+
+/**
+ * Get yesterday's food summary (/yesterday command)
+ */
+async function getYesterdaySummary(user: User): Promise<string> {
+  const today = getTodayDate(user.timezone);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  // Get yesterday's daily log
+  const dailyLog = await prisma.dailyLog.findUnique({
+    where: {
+      userId_date: {
+        userId: user.id,
+        date: yesterday,
+      },
+    },
+  });
+
+  if (!dailyLog || (dailyLog.caloriesTotal === 0 && dailyLog.proteinTotal === 0)) {
+    return `Yesterday\n\nNo food logged.`;
+  }
+
+  // Get food entries from yesterday
+  const foodEntries = await prisma.foodEntry.findMany({
+    where: {
+      userId: user.id,
+      dailyLogId: dailyLog.id,
+    },
+    orderBy: { loggedAt: 'asc' },
+  });
+
+  const calorieTarget = dailyLog.calorieTarget || user.calorieTarget || 2000;
+  const proteinTarget = dailyLog.proteinTarget || user.proteinTarget || 150;
+
+  let response = `Yesterday\n\n`;
+
+  // Group by meal type
+  const mealTypes = ['breakfast', 'lunch', 'dinner', 'snack'] as const;
+
+  for (const mealType of mealTypes) {
+    const mealEntries = foodEntries.filter(e => e.mealType === mealType);
+    if (mealEntries.length === 0) continue;
+
+    const mealLabel = mealType.charAt(0).toUpperCase() + mealType.slice(1);
+    response += `${mealLabel}:\n`;
+
+    for (const entry of mealEntries) {
+      const items = entry.foodItems as { name: string; quantity: string; calories: number; protein: number }[];
+      for (const item of items) {
+        response += `• ${item.name} (${item.quantity}) — ${item.calories} cal, ${item.protein}g\n`;
+      }
+    }
+    response += '\n';
+  }
+
+  // Totals
+  response += `Total: ${dailyLog.caloriesTotal.toLocaleString()} cal, ${dailyLog.proteinTotal}g protein`;
+
+  // Compare to targets
+  const calDiff = dailyLog.caloriesTotal - calorieTarget;
+  const protDiff = dailyLog.proteinTotal - proteinTarget;
+
+  if (Math.abs(calDiff) > 100 || Math.abs(protDiff) > 10) {
+    response += '\n(';
+    if (calDiff > 100) response += `${calDiff.toLocaleString()} cal over`;
+    else if (calDiff < -100) response += `${Math.abs(calDiff).toLocaleString()} cal under`;
+
+    if (Math.abs(calDiff) > 100 && Math.abs(protDiff) > 10) response += ', ';
+
+    if (protDiff > 10) response += `${protDiff}g protein over`;
+    else if (protDiff < -10) response += `${Math.abs(protDiff)}g protein short`;
+    response += ')';
   }
 
   return response;

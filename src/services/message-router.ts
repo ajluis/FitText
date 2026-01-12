@@ -28,6 +28,7 @@ const COMMANDS = [
   '/settings',
   '/progress',
   '/today',
+  '/yesterday',
   '/week',
   '/help',
   '/pause',
