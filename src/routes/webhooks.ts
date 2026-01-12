@@ -45,10 +45,11 @@ router.post('/sendblue/inbound', async (req: Request, res: Response) => {
         event: 'inbound_message',
         phone: phone.slice(-4), // Last 4 digits only
         hasMedia,
+        mediaUrl: hasMedia ? webhook.media_url?.substring(0, 100) : undefined,
         contentLength: webhook.content?.length || 0,
         preview,
       },
-      `Inbound: ***${phone.slice(-4)} "${preview}"`
+      `Inbound: ***${phone.slice(-4)} "${preview}"${hasMedia ? ' [has media]' : ''}`
     );
 
     // Process the message asynchronously
