@@ -224,11 +224,10 @@ Return JSON only:
  * Detect image type from magic bytes (file signature)
  * More reliable than content-type headers
  */
-function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' {
-  // Check first few bytes for magic numbers
-  if (data.length < 4) {
-    console.log('Image data too short, defaulting to JPEG');
-    return 'image/jpeg';
+function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null {
+  if (data.length < 12) {
+    console.log('Image data too short for format detection');
+    return null;
   }
 
   // JPEG: starts with FF D8 FF
@@ -248,23 +247,18 @@ function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/
 
   // WebP: starts with 52 49 46 46 (RIFF) and has WEBP at offset 8
   if (data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 &&
-      data.length > 11 && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) {
+      data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) {
     return 'image/webp';
   }
 
-  // HEIC/HEIF: starts with ftyp at offset 4 (after size bytes)
-  // These need conversion - for now default to JPEG since Sendblue may have converted
-  if (data.length > 11 && data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70) {
-    const brand = String.fromCharCode(data[8], data[9], data[10], data[11]);
-    if (brand === 'heic' || brand === 'heix' || brand === 'hevc' || brand === 'mif1') {
-      console.log('Detected HEIC/HEIF image, this format is not supported by Claude');
-      // Return JPEG and hope Sendblue converted it - if not, Claude will error
-      return 'image/jpeg';
-    }
+  // HEIC/HEIF: has 'ftyp' at offset 4 - NOT supported by Claude
+  if (data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70) {
+    console.log('Detected HEIC/HEIF format - not supported by Claude Vision');
+    return null;
   }
 
-  console.log(`Unknown image format (first bytes: ${data[0].toString(16)} ${data[1].toString(16)} ${data[2].toString(16)} ${data[3].toString(16)}), defaulting to JPEG`);
-  return 'image/jpeg';
+  console.log(`Unknown format. First 12 bytes: ${Array.from(data.slice(0, 12)).map(b => b.toString(16).padStart(2, '0')).join(' ')}`);
+  return null;
 }
 
 /**
@@ -295,13 +289,14 @@ Return JSON only:
   "notes": "optional notes about estimation"
 }`;
 
-  // Fetch the image with timeout
+  // Fetch and validate image
   let base64Image: string;
   let mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 
   try {
     console.log(`Fetching photo from URL: ${photoUrl.substring(0, 100)}...`);
     const imageResponse = await fetchWithTimeout(photoUrl, { timeoutMs: 15000 });
+
     if (!imageResponse.ok) {
       console.error(`Image fetch failed with status ${imageResponse.status}`);
       return {
@@ -313,15 +308,44 @@ Return JSON only:
         },
       };
     }
+
     const imageBuffer = await imageResponse.arrayBuffer();
     const uint8Array = new Uint8Array(imageBuffer);
+
+    // Detect actual image type from magic bytes
+    const detectedType = detectImageType(uint8Array);
+    const contentType = imageResponse.headers.get('content-type') || 'unknown';
+
+    console.log(`Image details: content-type=${contentType}, detected=${detectedType}, size=${imageBuffer.byteLength} bytes`);
+
+    if (!detectedType) {
+      // Unsupported format (likely HEIC from iPhone)
+      return {
+        success: false,
+        error: {
+          type: 'image_fetch_error',
+          message: 'Unsupported image format (likely HEIC)',
+          userMessage: "That image format isn't supported. Try taking the photo with your camera app instead of from your photo library, or just describe what you're eating.",
+        },
+      };
+    }
+
+    mediaType = detectedType;
     base64Image = Buffer.from(imageBuffer).toString('base64');
 
-    // Detect actual image type from magic bytes (more reliable than content-type header)
-    mediaType = detectImageType(uint8Array);
+    // Validate base64 length is reasonable
+    if (base64Image.length < 100) {
+      console.error('Base64 image too small, likely corrupt');
+      return {
+        success: false,
+        error: {
+          type: 'image_fetch_error',
+          message: 'Image appears corrupt or empty',
+          userMessage: "That image looks corrupt. Can you try sending it again?",
+        },
+      };
+    }
 
-    const rawContentType = imageResponse.headers.get('content-type') || 'unknown';
-    console.log(`Image content-type header: ${rawContentType}, detected type: ${mediaType}, size: ${imageBuffer.byteLength} bytes`);
   } catch (error) {
     console.error('Image fetch error:', error);
     return {
@@ -347,7 +371,7 @@ Return JSON only:
                 type: 'image',
                 source: {
                   type: 'base64',
-                  media_type: mediaType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+                  media_type: mediaType,
                   data: base64Image,
                 },
               },
