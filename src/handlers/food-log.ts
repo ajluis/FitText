@@ -221,6 +221,53 @@ Return JSON only:
 }
 
 /**
+ * Detect image type from magic bytes (file signature)
+ * More reliable than content-type headers
+ */
+function detectImageType(data: Uint8Array): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' {
+  // Check first few bytes for magic numbers
+  if (data.length < 4) {
+    console.log('Image data too short, defaulting to JPEG');
+    return 'image/jpeg';
+  }
+
+  // JPEG: starts with FF D8 FF
+  if (data[0] === 0xFF && data[1] === 0xD8 && data[2] === 0xFF) {
+    return 'image/jpeg';
+  }
+
+  // PNG: starts with 89 50 4E 47 (‰PNG)
+  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4E && data[3] === 0x47) {
+    return 'image/png';
+  }
+
+  // GIF: starts with 47 49 46 38 (GIF8)
+  if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38) {
+    return 'image/gif';
+  }
+
+  // WebP: starts with 52 49 46 46 (RIFF) and has WEBP at offset 8
+  if (data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 &&
+      data.length > 11 && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) {
+    return 'image/webp';
+  }
+
+  // HEIC/HEIF: starts with ftyp at offset 4 (after size bytes)
+  // These need conversion - for now default to JPEG since Sendblue may have converted
+  if (data.length > 11 && data[4] === 0x66 && data[5] === 0x74 && data[6] === 0x79 && data[7] === 0x70) {
+    const brand = String.fromCharCode(data[8], data[9], data[10], data[11]);
+    if (brand === 'heic' || brand === 'heix' || brand === 'hevc' || brand === 'mif1') {
+      console.log('Detected HEIC/HEIF image, this format is not supported by Claude');
+      // Return JPEG and hope Sendblue converted it - if not, Claude will error
+      return 'image/jpeg';
+    }
+  }
+
+  console.log(`Unknown image format (first bytes: ${data[0].toString(16)} ${data[1].toString(16)} ${data[2].toString(16)} ${data[3].toString(16)}), defaulting to JPEG`);
+  return 'image/jpeg';
+}
+
+/**
  * Parse food from photo using Vision AI with retry
  */
 async function parseFoodFromPhoto(
@@ -267,27 +314,14 @@ Return JSON only:
       };
     }
     const imageBuffer = await imageResponse.arrayBuffer();
+    const uint8Array = new Uint8Array(imageBuffer);
     base64Image = Buffer.from(imageBuffer).toString('base64');
 
-    // Normalize media type - extract just the mime type and map to supported formats
-    const rawContentType = imageResponse.headers.get('content-type') || 'image/jpeg';
-    const mimeType = rawContentType.split(';')[0].trim().toLowerCase();
-    console.log(`Image content-type: ${rawContentType}, normalized: ${mimeType}, size: ${imageBuffer.byteLength} bytes`);
+    // Detect actual image type from magic bytes (more reliable than content-type header)
+    mediaType = detectImageType(uint8Array);
 
-    // Map to supported types
-    const typeMap: Record<string, 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'> = {
-      'image/jpeg': 'image/jpeg',
-      'image/jpg': 'image/jpeg',
-      'image/png': 'image/png',
-      'image/gif': 'image/gif',
-      'image/webp': 'image/webp',
-      'image/heic': 'image/jpeg', // HEIC often gets converted, treat as JPEG
-      'image/heif': 'image/jpeg',
-      'application/octet-stream': 'image/jpeg', // Default binary to JPEG
-    };
-
-    mediaType = typeMap[mimeType] || 'image/jpeg';
-    console.log(`Using media type: ${mediaType}`);
+    const rawContentType = imageResponse.headers.get('content-type') || 'unknown';
+    console.log(`Image content-type header: ${rawContentType}, detected type: ${mediaType}, size: ${imageBuffer.byteLength} bytes`);
   } catch (error) {
     console.error('Image fetch error:', error);
     return {
