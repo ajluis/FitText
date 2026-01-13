@@ -130,6 +130,12 @@ export async function sendMessage(options: SendMessageOptions): Promise<SendMess
  * Send a message and handle errors gracefully
  */
 export async function sendSMS(phone: string, message: string, mediaUrl?: string): Promise<boolean> {
+  // Log outbound message (mask phone, show preview)
+  const maskedPhone = phone.slice(-4);
+  const preview = message.length > 100 ? message.substring(0, 100) + '...' : message;
+  const mediaInfo = mediaUrl ? ' [+media]' : '';
+  console.log(`Outbound to ***${maskedPhone}: "${preview}"${mediaInfo}`);
+
   const result = await sendMessage({ number: phone, content: message, mediaUrl });
 
   if (!result.success) {
@@ -148,6 +154,11 @@ export async function sendSMSWithEffect(
   message: string,
   effect: SendStyle
 ): Promise<boolean> {
+  // Log outbound message with effect
+  const maskedPhone = phone.slice(-4);
+  const preview = message.length > 100 ? message.substring(0, 100) + '...' : message;
+  console.log(`Outbound to ***${maskedPhone}: "${preview}" [effect: ${effect}]`);
+
   const result = await sendMessage({
     number: phone,
     content: message,
