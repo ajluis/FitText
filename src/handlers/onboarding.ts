@@ -484,6 +484,7 @@ export async function processOnboardingMessage(
     const fallbackFields = tryFallbackParsing(input, state.currentStep);
     if (fallbackFields) {
       extractedFields = fallbackFields;
+      usedFallback = true; // Mark as fallback so we use proper prompts
     }
   }
 
