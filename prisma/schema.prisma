@@ -158,6 +158,9 @@ model User {
   reminderBreakfastTime  String              @default("09:00") // HH:mm format
   reminderLunchTime      String              @default("13:00")
   reminderDinnerTime     String              @default("20:00")
+  reminderBreakfastEnabled Boolean           @default(true)
+  reminderLunchEnabled     Boolean           @default(true)
+  reminderDinnerEnabled    Boolean           @default(true)
   reminderWorkoutTime    String?
   dailySummaryTime       String              @default("21:00")
   weighInDay             WeekDay             @default(WE)

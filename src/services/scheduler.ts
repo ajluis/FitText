@@ -176,8 +176,9 @@ async function checkMealReminders(): Promise<void> {
         },
       });
 
-      // Check breakfast reminder
+      // Check breakfast reminder (only if enabled)
       if (
+        user.reminderBreakfastEnabled &&
         currentTime >= user.reminderBreakfastTime &&
         currentTime < user.reminderLunchTime &&
         (!dailyLog || !dailyLog.breakfastLogged)
@@ -189,8 +190,9 @@ async function checkMealReminders(): Promise<void> {
         }
       }
 
-      // Check lunch reminder
+      // Check lunch reminder (only if enabled)
       if (
+        user.reminderLunchEnabled &&
         currentTime >= user.reminderLunchTime &&
         currentTime < user.reminderDinnerTime &&
         (!dailyLog || !dailyLog.lunchLogged)
@@ -202,8 +204,9 @@ async function checkMealReminders(): Promise<void> {
         }
       }
 
-      // Check dinner reminder
+      // Check dinner reminder (only if enabled)
       if (
+        user.reminderDinnerEnabled &&
         currentTime >= user.reminderDinnerTime &&
         (!dailyLog || !dailyLog.dinnerLogged)
       ) {

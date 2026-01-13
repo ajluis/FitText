@@ -31,6 +31,10 @@ const SettingsChangeSchema = z.object({
     'hydration_reminders',
     'pause_reminders',
     'resume_reminders',
+    'breakfast_reminder_enabled',
+    'lunch_reminder_enabled',
+    'dinner_reminder_enabled',
+    'single_reminder',
   ]),
   value: z.string(),
   confidence: z.enum(['high', 'medium', 'low']),
@@ -173,6 +177,14 @@ export function isSettingsRequest(message: string): boolean {
     /\bi('m| am) in\b.*(timezone|time zone)/i,
     /\bi('m| am) (now )?in (tokyo|london|sydney|singapore)/i,
     /\bswitch.*(to|my).*(tokyo|london|pacific|eastern)/i,
+    // Reminder customization patterns
+    /\b(only|just)\s+(one|1|a single)\s+reminder/i,
+    /\bremind me (only|just)?\s*(at|around)/i,
+    /\b(disable|turn off|stop|no)\s+(breakfast|lunch|dinner)\s+(reminder|notification)/i,
+    /\b(enable|turn on|start)\s+(breakfast|lunch|dinner)\s+(reminder|notification)/i,
+    /\bdon'?t\s+(remind|text|message)\s+(me\s+)?(about|for|at)\s+(breakfast|lunch|dinner)/i,
+    /\b(no more|stop)\s+(breakfast|lunch|dinner)/i,
+    /\b(only|just)\s+(breakfast|lunch|dinner)\s+reminder/i,
   ];
 
   return settingsPatterns.some(pattern => pattern.test(lower));
@@ -210,6 +222,10 @@ AVAILABLE SETTINGS:
 - hydration_reminders: on/off
 - pause_reminders: pause (with optional duration like "4h" or "until tomorrow")
 - resume_reminders: resume
+- breakfast_reminder_enabled: on/off (enable or disable breakfast reminder)
+- lunch_reminder_enabled: on/off (enable or disable lunch reminder)
+- dinner_reminder_enabled: on/off (enable or disable dinner reminder)
+- single_reminder: time like "3pm" (sets ONE reminder at that time, disables others)
 
 Parse the user's message and extract what setting they want to change.
 
@@ -498,6 +514,51 @@ async function applySettingsChange(
         },
       });
       return { success: true, message: 'Reminders resumed! ▶️' };
+    }
+
+    case 'breakfast_reminder_enabled': {
+      const enabled = ['on', 'yes', 'enable', 'true', '1'].includes(valueLower);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { reminderBreakfastEnabled: enabled },
+      });
+      return { success: true, message: `Breakfast reminder ${enabled ? 'enabled' : 'disabled'}.` };
+    }
+
+    case 'lunch_reminder_enabled': {
+      const enabled = ['on', 'yes', 'enable', 'true', '1'].includes(valueLower);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { reminderLunchEnabled: enabled },
+      });
+      return { success: true, message: `Lunch reminder ${enabled ? 'enabled' : 'disabled'}.` };
+    }
+
+    case 'dinner_reminder_enabled': {
+      const enabled = ['on', 'yes', 'enable', 'true', '1'].includes(valueLower);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { reminderDinnerEnabled: enabled },
+      });
+      return { success: true, message: `Dinner reminder ${enabled ? 'enabled' : 'disabled'}.` };
+    }
+
+    case 'single_reminder': {
+      const time = parseTime(change.value);
+      if (time) {
+        // Set all meal reminders to the same time but only enable one
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            reminderBreakfastEnabled: false,
+            reminderLunchEnabled: true,
+            reminderDinnerEnabled: false,
+            reminderLunchTime: time, // Use lunch slot for the single reminder
+          },
+        });
+        return { success: true, message: `Got it — you'll get one reminder at ${formatTime(time)}.` };
+      }
+      return { success: false, error: 'Please enter a valid time like "3pm" or "15:00".' };
     }
 
     default:
