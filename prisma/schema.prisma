@@ -192,6 +192,7 @@ model User {
   onboardingState        OnboardingState?
   settingsState          SettingsState?
   conversationContext    ConversationContext?
+  buildSession           BuildSession?
 }
 
 model DailyLog {
@@ -372,4 +373,20 @@ model SentReminder {
 
   @@unique([userId, reminderType, sentForDate])
   @@index([userId, sentForDate])
+}
+
+// Build mode session for admin code editing via SMS
+model BuildSession {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  active              Boolean  @default(true)
+  conversationHistory Json     @default("[]")
+  filesModified       String[] @default([])
+  commitsMade         Int      @default(0)
+  toolCallCount       Int      @default(0)
+
+  lastInteraction     DateTime @default(now())
+  createdAt           DateTime @default(now())
 }

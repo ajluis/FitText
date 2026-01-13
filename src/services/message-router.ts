@@ -39,6 +39,9 @@ const COMMANDS = [
   '/weight',
   '/macros',
   '/status',
+  '/build',
+  '/exit',
+  '/done',
 ] as const;
 
 // Quick patterns for fast classification (before LLM)

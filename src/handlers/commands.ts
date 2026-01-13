@@ -7,6 +7,7 @@ import { getWeeklyWorkoutSummary } from './workout-log';
 import { getWeightProgress } from './weight-log';
 import { getProgressSummary } from './progress';
 import { getCurrentTimeDecimal, getTodayDate } from '../lib/calculations';
+import { handleBuildCommand, handleBuildExit, isInBuildMode } from './build';
 
 /**
  * Handle slash commands
@@ -82,6 +83,20 @@ export async function handleCommand(
     case '/yesterday':
       const yesterday = await getYesterdaySummary(user);
       await sendSMS(user.phone, yesterday);
+      break;
+
+    case '/build':
+      await handleBuildCommand(user);
+      break;
+
+    case '/exit':
+    case '/done':
+      // Check if in build mode
+      if (await isInBuildMode(user.id)) {
+        await handleBuildExit(user);
+      } else {
+        await sendSMS(user.phone, 'Nothing to exit from.');
+      }
       break;
 
     default:

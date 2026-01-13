@@ -10,6 +10,9 @@ const envSchema = z.object({
   USDA_API_KEY: z.string(),
   PORT: z.string().default('3000'),
   WEBHOOK_BASE_URL: z.string(),
+  // Build mode (optional)
+  BUILD_ADMIN_PHONES: z.string().optional(),
+  GITHUB_TOKEN: z.string().optional(),
 });
 
 function loadConfig() {
@@ -41,6 +44,15 @@ function loadConfig() {
     server: {
       port: parseInt(parsed.data.PORT, 10),
       webhookBaseUrl: parsed.data.WEBHOOK_BASE_URL,
+    },
+    build: {
+      adminPhones: (parsed.data.BUILD_ADMIN_PHONES || '')
+        .split(',')
+        .map(p => p.trim())
+        .filter(Boolean),
+      githubToken: parsed.data.GITHUB_TOKEN || '',
+      maxToolCalls: 50,
+      sessionTimeoutMinutes: 60,
     },
   };
 }

@@ -12,6 +12,7 @@ import { handleCommand } from './commands';
 import { enterSettings, isInSettings, processSettingsMessage } from './settings';
 import { handleQuestion, handleGreeting, handleFreeform } from '../services/coaching-ai';
 import { handleSettingsChange } from '../services/settings-ai';
+import { isInBuildMode, processBuildModeMessage } from './build';
 
 /**
  * Main message handler - routes incoming messages to appropriate handlers
@@ -56,6 +57,12 @@ export async function handleInboundMessage(
   // Check if user is in settings menu
   if (await isInSettings(user.id)) {
     await processSettingsMessage(user, content);
+    return;
+  }
+
+  // Check if user is in build mode (admin code editing)
+  if (await isInBuildMode(user.id)) {
+    await processBuildModeMessage(user, content);
     return;
   }
 
