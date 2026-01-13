@@ -1,7 +1,7 @@
 import { OnboardingStep, PrimaryGoal, ActivityLevel, Sex, User } from '@prisma/client';
 import prisma from '../lib/db';
 import { config } from '../config';
-import { sendSMS, sendSMSWithEffect } from '../services/sendblue';
+import { sendSMS, sendSMSWithEffect, sendTypingIndicator } from '../services/sendblue';
 import { parseHeight, parseWeight, calculateTargets } from '../lib/calculations';
 import { isMenuSelection } from '../services/message-router';
 import {
@@ -49,15 +49,13 @@ async function sendOnboardingMessage(
 
 // Static messages
 const MESSAGES = {
-  welcome: `Hey! 👋 I'm FitText, your nutrition coach via text.
+  welcome: `Hey this is Alex from FitText.`,
+
+  welcomeFollowup: `Do you have a specific goal in mind or are you just looking to log and track your meals?
 
 Reply:
-1️⃣ Set up my goals (takes 2 min)
-2️⃣ Just start logging
-
-You can always customize later with /settings`,
-
-  welcomeFollowup: `You can send me a photo of what you eat or just a description and I'll log it here to meet your goals. Can I ask a few questions first?`,
+1️⃣ Set up my goals
+2️⃣ Just start logging`,
 
   firstQuestion: `What's your main goal?
 
@@ -163,8 +161,20 @@ export async function startOnboarding(phone: string): Promise<void> {
     },
   });
 
-  // Send welcome message with choice
+  // Send welcome message
   await sendSMS(phone, MESSAGES.welcome);
+
+  // Wait 2 seconds before typing indicator
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // Show typing indicator
+  await sendTypingIndicator(phone);
+
+  // Wait 1.5 seconds before follow-up
+  await new Promise(resolve => setTimeout(resolve, 1500));
+
+  // Send follow-up message with choice
+  await sendSMS(phone, MESSAGES.welcomeFollowup);
 
   // Send contact card (VCF)
   const vcfUrl = `${config.server.webhookBaseUrl}/static/coach.vcf`;

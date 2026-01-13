@@ -20,6 +20,7 @@ export const ParsedFoodResponseSchema = z.object({
   totalProtein: z.number().min(0),
   confidence: z.enum(['high', 'medium', 'low']).default('medium'),
   notes: z.string().optional(),
+  targetDate: z.string().optional(), // "today" (default), "yesterday", or ISO date string
 });
 
 export type FoodItemType = z.output<typeof FoodItemSchema>;

@@ -37,6 +37,7 @@ export interface ParsedFood {
   totalProtein: number;
   confidence: 'high' | 'medium' | 'low';
   mealType: MealType;
+  targetDate?: string; // "today" (default), "yesterday", or ISO date string
 }
 
 export type ParseResult = { success: true; data: ParsedFood } | { success: false; error: ParseError };
@@ -120,6 +121,40 @@ function extractMealType(message: string): { mealType: MealType | null; cleanedM
 }
 
 /**
+ * Resolve a date reference string to an actual Date object
+ * @param dateRef - "today", "yesterday", or ISO date string (e.g., "2024-01-15")
+ * @param timezone - User's timezone
+ * @returns Date object for the target date
+ */
+function resolveTargetDate(dateRef: string | undefined, timezone: string): Date {
+  const today = getTodayDate(timezone);
+
+  if (!dateRef || dateRef === 'today') {
+    return today;
+  }
+
+  if (dateRef === 'yesterday') {
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    return yesterday;
+  }
+
+  // Try to parse as ISO date string
+  const parsed = new Date(dateRef);
+  if (!isNaN(parsed.getTime())) {
+    // Return the date at midnight in the user's timezone
+    // We need to extract just the date part and create a proper date
+    const year = parsed.getFullYear();
+    const month = parsed.getMonth();
+    const day = parsed.getDate();
+    return new Date(year, month, day);
+  }
+
+  // Default to today if parsing fails
+  return today;
+}
+
+/**
  * Parse food from text description using LLM with retry
  */
 async function parseFoodFromText(
@@ -134,13 +169,20 @@ Rules:
 3. Provide calorie and protein estimates
 4. Be realistic - a "bowl" of rice is about 1-1.5 cups
 5. For restaurant/brand foods, use typical serving sizes
-${user.dietaryRestrictions.length > 0 ? `6. User has dietary restrictions: ${user.dietaryRestrictions.join(', ')}` : ''}
+6. Extract any date references from the message (see targetDate below)
+${user.dietaryRestrictions.length > 0 ? `7. User has dietary restrictions: ${user.dietaryRestrictions.join(', ')}` : ''}
 
 Common portion references:
 - Chicken breast: 6oz = 280 cal, 52g protein
 - Rice (1 cup cooked): 205 cal, 4g protein
 - Eggs (1 large): 70 cal, 6g protein
 - Protein shake (1 scoop): 120 cal, 24g protein
+
+Date extraction:
+- Look for date references like "yesterday", "last night", "this morning", "2 days ago", "on Monday", "last week", etc.
+- "last night" or "for dinner yesterday" = yesterday
+- "this morning" or "earlier" with no other context = today
+- If no date reference, default to "today"
 
 Return JSON only:
 {
@@ -149,7 +191,8 @@ Return JSON only:
   ],
   "totalCalories": number,
   "totalProtein": number,
-  "confidence": "high" | "medium" | "low"
+  "confidence": "high" | "medium" | "low",
+  "targetDate": "today" | "yesterday" | "YYYY-MM-DD"
 }`;
 
   const result = await callClaudeWithRetry(
@@ -210,6 +253,7 @@ Return JSON only:
         totalProtein: parsed.totalProtein || 0,
         confidence: parsed.confidence || 'medium',
         mealType: getMealTypeFromTime(user.timezone),
+        targetDate: parsed.targetDate || 'today',
       },
     };
   } catch {
@@ -495,16 +539,16 @@ Return JSON only:
 }
 
 /**
- * Get or create today's daily log
+ * Get or create daily log for a specific date (defaults to today)
  */
-async function getOrCreateDailyLog(user: User) {
-  const today = getTodayDate(user.timezone);
+async function getOrCreateDailyLog(user: User, targetDate?: Date) {
+  const date = targetDate || getTodayDate(user.timezone);
 
   let dailyLog = await prisma.dailyLog.findUnique({
     where: {
       userId_date: {
         userId: user.id,
-        date: today,
+        date: date,
       },
     },
   });
@@ -513,7 +557,7 @@ async function getOrCreateDailyLog(user: User) {
     dailyLog = await prisma.dailyLog.create({
       data: {
         userId: user.id,
-        date: today,
+        date: date,
         calorieTarget: user.calorieTarget,
         proteinTarget: user.proteinTarget,
       },
@@ -555,10 +599,25 @@ function formatFoodConfirmation(parsed: ParsedFood, mealType: MealType, askMealT
 function formatLoggedResponse(
   parsed: ParsedFood,
   dailyLog: { caloriesTotal: number; proteinTotal: number; calorieTarget: number | null; proteinTarget: number | null },
-  mealType: MealType
+  mealType: MealType,
+  targetDateRef?: string
 ): string {
   const mealLabel = mealType.charAt(0).toUpperCase() + mealType.slice(1);
-  let message = `Got it! Logged for ${mealLabel.toLowerCase()}:\n`;
+  const isYesterday = targetDateRef === 'yesterday';
+  const isPastDate = targetDateRef && targetDateRef !== 'today' && targetDateRef !== 'yesterday';
+
+  let dateLabel = '';
+  if (isYesterday) {
+    dateLabel = ' (yesterday)';
+  } else if (isPastDate) {
+    // Format as readable date for ISO dates
+    const date = new Date(targetDateRef);
+    if (!isNaN(date.getTime())) {
+      dateLabel = ` (${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`;
+    }
+  }
+
+  let message = `Got it! Logged for ${mealLabel.toLowerCase()}${dateLabel}:\n`;
 
   for (const item of parsed.items) {
     message += `• ${item.name} (${item.quantity}) — ${item.calories} cal, ${item.protein}g protein\n`;
@@ -573,8 +632,13 @@ function formatLoggedResponse(
   const proteinRemaining = Math.round(proteinTarget - dailyLog.proteinTotal);
   const proteinTotal = Math.round(dailyLog.proteinTotal);
 
-  message += `\n\nToday so far: ${dailyLog.caloriesTotal.toLocaleString()} cal, ${proteinTotal}g protein`;
-  message += `\n(${caloriesRemaining > 0 ? caloriesRemaining.toLocaleString() : 0} cal, ${proteinRemaining > 0 ? proteinRemaining : 0}g protein remaining)`;
+  const dayLabel = isYesterday ? 'Yesterday' : (isPastDate ? 'That day' : 'Today');
+  message += `\n\n${dayLabel} so far: ${dailyLog.caloriesTotal.toLocaleString()} cal, ${proteinTotal}g protein`;
+
+  // Only show "remaining" for today
+  if (!isYesterday && !isPastDate) {
+    message += `\n(${caloriesRemaining > 0 ? caloriesRemaining.toLocaleString() : 0} cal, ${proteinRemaining > 0 ? proteinRemaining : 0}g protein remaining)`;
+  }
 
   return message;
 }
@@ -894,7 +958,9 @@ async function logFood(
   rawInput: string,
   photoUrl?: string
 ): Promise<void> {
-  const dailyLog = await getOrCreateDailyLog(user);
+  // Resolve target date from parsed food (defaults to today)
+  const targetDate = resolveTargetDate(parsed.targetDate, user.timezone);
+  const dailyLog = await getOrCreateDailyLog(user, targetDate);
 
   // Create food entry
   await prisma.foodEntry.create({
@@ -944,7 +1010,8 @@ async function logFood(
         calorieTarget: dailyLog.calorieTarget,
         proteinTarget: dailyLog.proteinTarget,
       },
-      parsed.mealType
+      parsed.mealType,
+      parsed.targetDate
     )
   );
 }

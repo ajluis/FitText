@@ -3,6 +3,7 @@ import { fetchWithTimeout, TimeoutError } from '../lib/fetch-with-timeout';
 import { withRetry, isRetryableStatus } from '../lib/retry';
 
 const SENDBLUE_API_URL = 'https://api.sendblue.co/api/send-message';
+const SENDBLUE_TYPING_INDICATOR_URL = 'https://api.sendblue.co/api/send-typing-indicator';
 const SENDBLUE_TIMEOUT_MS = 15000; // 15 second timeout for SMS API
 
 // Track last message time per user for rate limiting
@@ -143,6 +144,40 @@ export async function sendSMS(phone: string, message: string, mediaUrl?: string)
   }
 
   return result.success;
+}
+
+/**
+ * Send a typing indicator to show the user we're processing their message
+ * This is an iMessage-only feature and will be ignored for SMS
+ */
+export async function sendTypingIndicator(phone: string): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(SENDBLUE_TYPING_INDICATOR_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'sb-api-key-id': config.sendblue.apiKey,
+        'sb-api-secret-key': config.sendblue.apiSecret,
+      },
+      body: JSON.stringify({
+        number: phone,
+        from_number: config.sendblue.phoneNumber,
+      }),
+      timeoutMs: SENDBLUE_TIMEOUT_MS,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Sendblue typing indicator error:', response.status, errorText);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    // Typing indicator is non-critical, so we just log and return false
+    console.error('Failed to send typing indicator:', error);
+    return false;
+  }
 }
 
 /**
