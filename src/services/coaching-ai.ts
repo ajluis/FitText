@@ -39,15 +39,16 @@ const PERSONALITY_PROMPTS: Record<CoachingPersonality, { description: string; st
 
 /**
  * Format a date for display
+ * Note: For date-only fields like DailyLog.date, use the UTC values since
+ * Prisma stores dates at midnight UTC and we want the calendar date, not
+ * a timezone-adjusted date that might be off by a day.
  */
-function formatDateForDisplay(date: Date, timezone: string): string {
+function formatDateForDisplay(date: Date, _timezone: string): string {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-  // Adjust for timezone
-  const localDate = new Date(date.toLocaleString('en-US', { timeZone: timezone }));
-
-  return `${days[localDate.getDay()]}, ${months[localDate.getMonth()]} ${localDate.getDate()}`;
+  // Use UTC values for date-only fields to avoid timezone offset issues
+  return `${days[date.getUTCDay()]}, ${months[date.getUTCMonth()]} ${date.getUTCDate()}`;
 }
 
 /**
