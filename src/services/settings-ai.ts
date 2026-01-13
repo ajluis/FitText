@@ -179,6 +179,7 @@ export function isSettingsRequest(message: string): boolean {
     /\bswitch.*(to|my).*(tokyo|london|pacific|eastern)/i,
     // Reminder customization patterns
     /\b(only|just)\s+(one|1|a single)\s+reminder/i,
+    /\b(only|just)\s+(have|want|need|get)\s+(one|1|a single)\s+reminder/i,
     /\bremind me (only|just)?\s*(at|around)/i,
     /\b(disable|turn off|stop|no)\s+(breakfast|lunch|dinner)\s+(reminder|notification)/i,
     /\b(enable|turn on|start)\s+(breakfast|lunch|dinner)\s+(reminder|notification)/i,
