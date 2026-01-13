@@ -84,9 +84,10 @@ function getRandomMessage(messages: string[]): string {
 async function wasReminderSentToday(
   userId: string,
   reminderType: ReminderType,
-  timezone: string
+  timezone: string,
+  forDate?: Date
 ): Promise<boolean> {
-  const today = getTodayDate(timezone);
+  const today = forDate ?? getTodayDate(timezone);
 
   const sent = await prisma.sentReminder.findUnique({
     where: {
@@ -107,9 +108,10 @@ async function wasReminderSentToday(
 async function markReminderSent(
   userId: string,
   reminderType: ReminderType,
-  timezone: string
+  timezone: string,
+  forDate?: Date
 ): Promise<void> {
-  const today = getTodayDate(timezone);
+  const today = forDate ?? getTodayDate(timezone);
 
   await prisma.sentReminder.upsert({
     where: {
@@ -165,8 +167,10 @@ async function checkMealReminders(): Promise<void> {
         minute: '2-digit',
       });
 
-      // Get today's log
+      // Capture today's date ONCE at the start to avoid race conditions at midnight
       const today = getTodayDate(user.timezone);
+
+      // Get today's log
       const dailyLog = await prisma.dailyLog.findUnique({
         where: {
           userId_date: {
@@ -183,10 +187,10 @@ async function checkMealReminders(): Promise<void> {
         currentTime < user.reminderLunchTime &&
         (!dailyLog || !dailyLog.breakfastLogged)
       ) {
-        const alreadySent = await wasReminderSentToday(user.id, 'breakfast', user.timezone);
+        const alreadySent = await wasReminderSentToday(user.id, 'breakfast', user.timezone, today);
         if (!alreadySent) {
           await sendSMS(user.phone, getRandomMessage(REMINDER_MESSAGES.breakfast));
-          await markReminderSent(user.id, 'breakfast', user.timezone);
+          await markReminderSent(user.id, 'breakfast', user.timezone, today);
         }
       }
 
@@ -197,10 +201,10 @@ async function checkMealReminders(): Promise<void> {
         currentTime < user.reminderDinnerTime &&
         (!dailyLog || !dailyLog.lunchLogged)
       ) {
-        const alreadySent = await wasReminderSentToday(user.id, 'lunch', user.timezone);
+        const alreadySent = await wasReminderSentToday(user.id, 'lunch', user.timezone, today);
         if (!alreadySent) {
           await sendSMS(user.phone, getRandomMessage(REMINDER_MESSAGES.lunch));
-          await markReminderSent(user.id, 'lunch', user.timezone);
+          await markReminderSent(user.id, 'lunch', user.timezone, today);
         }
       }
 
@@ -212,10 +216,10 @@ async function checkMealReminders(): Promise<void> {
         currentTime < '23:30' &&
         (!dailyLog || !dailyLog.dinnerLogged)
       ) {
-        const alreadySent = await wasReminderSentToday(user.id, 'dinner', user.timezone);
+        const alreadySent = await wasReminderSentToday(user.id, 'dinner', user.timezone, today);
         if (!alreadySent) {
           await sendSMS(user.phone, getRandomMessage(REMINDER_MESSAGES.dinner));
-          await markReminderSent(user.id, 'dinner', user.timezone);
+          await markReminderSent(user.id, 'dinner', user.timezone, today);
         }
       }
     } catch (error) {
@@ -522,10 +526,10 @@ async function sendWeeklySummaries(): Promise<void> {
 
       // Send at 7pm on Sunday
       if (currentTime >= '19:00' && currentTime < '20:00') {
-        const alreadySent = await wasReminderSentToday(user.id, 'hydration', user.timezone); // Reuse for weekly
+        const alreadySent = await wasReminderSentToday(user.id, 'daily_summary', user.timezone); // Reuse daily_summary type for weekly
         if (!alreadySent) {
           await sendWeeklySummary(user);
-          await markReminderSent(user.id, 'hydration', user.timezone);
+          await markReminderSent(user.id, 'daily_summary', user.timezone);
         }
       }
     } catch (error) {
@@ -738,6 +742,7 @@ export async function startScheduler(): Promise<void> {
     JOB_TYPES.CHECK_REMINDERS,
     { type: JOB_TYPES.CHECK_REMINDERS },
     {
+      jobId: 'recurring-check-reminders',
       repeat: {
         pattern: '*/15 * * * *', // Every 15 minutes
       },
@@ -749,6 +754,7 @@ export async function startScheduler(): Promise<void> {
     JOB_TYPES.SEND_DAILY_SUMMARY,
     { type: JOB_TYPES.SEND_DAILY_SUMMARY },
     {
+      jobId: 'recurring-send-daily-summary',
       repeat: {
         pattern: '*/30 * * * *', // Every 30 minutes
       },
@@ -760,6 +766,7 @@ export async function startScheduler(): Promise<void> {
     JOB_TYPES.CHECK_INACTIVE_USERS,
     { type: JOB_TYPES.CHECK_INACTIVE_USERS },
     {
+      jobId: 'recurring-check-inactive-users',
       repeat: {
         pattern: '0 10 * * *', // 10am daily
       },
@@ -771,6 +778,7 @@ export async function startScheduler(): Promise<void> {
     JOB_TYPES.CHECK_WEEKLY_SUMMARY,
     { type: JOB_TYPES.CHECK_WEEKLY_SUMMARY },
     {
+      jobId: 'recurring-check-weekly-summary',
       repeat: {
         pattern: '0 19 * * 0', // 7pm Sunday
       },

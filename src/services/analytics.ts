@@ -326,42 +326,19 @@ export async function getAdjustmentRate(
 }
 
 // ============================================
-// EXERCISE PROGRESSION
+// WORKOUT ANALYTICS (SIMPLIFIED)
 // ============================================
-
-export interface ExerciseProgression {
-  exerciseName: string;
-  sessions: number;
-  volumeTrend: 'increasing' | 'plateau' | 'declining' | 'insufficient_data';
-  avgVolume: number;
-  maxWeight: number;
-  totalSets: number;
-  weeklyFrequency: number;
-}
 
 export interface WorkoutAnalytics {
   totalWorkouts: number;
   weeklyAverage: number;
-  exerciseProgressions: ExerciseProgression[];
-  topExercises: string[];
   consistencyRate: number;
-  volumeTrend: 'increasing' | 'plateau' | 'declining' | 'insufficient_data';
-}
-
-interface ExerciseSet {
-  reps: number;
-  weight: number;
-}
-
-interface Exercise {
-  name: string;
-  sets: ExerciseSet[];
 }
 
 /**
- * Analyze exercise progression over time
+ * Analyze workout frequency over time
  */
-export async function getExerciseProgression(
+export async function getWorkoutAnalytics(
   user: User,
   days: number = 30
 ): Promise<WorkoutAnalytics> {
@@ -384,10 +361,7 @@ export async function getExerciseProgression(
     return {
       totalWorkouts: 0,
       weeklyAverage: 0,
-      exerciseProgressions: [],
-      topExercises: [],
       consistencyRate: 0,
-      volumeTrend: 'insufficient_data',
     };
   }
 
@@ -400,166 +374,24 @@ export async function getExerciseProgression(
   const weeksWithTarget = Math.floor(workouts.length / targetPerWeek);
   const consistencyRate = Math.min(100, Math.round((weeksWithTarget / weeks) * 100));
 
-  // Track exercise data
-  const exerciseData: Record<string, {
-    sessions: number;
-    volumes: number[];
-    maxWeight: number;
-    totalSets: number;
-    lastLoggedAt: Date;
-  }> = {};
-
-  // Track total volume over time (for overall trend)
-  const weeklyVolumes: number[] = [];
-  let currentWeekVolume = 0;
-  let currentWeekStart = new Date(workouts[0]?.loggedAt || today);
-  currentWeekStart.setDate(currentWeekStart.getDate() - currentWeekStart.getDay());
-
-  for (const workout of workouts) {
-    // Check if we've moved to a new week
-    const workoutWeekStart = new Date(workout.loggedAt);
-    workoutWeekStart.setDate(workoutWeekStart.getDate() - workoutWeekStart.getDay());
-
-    if (workoutWeekStart.getTime() !== currentWeekStart.getTime()) {
-      if (currentWeekVolume > 0) {
-        weeklyVolumes.push(currentWeekVolume);
-      }
-      currentWeekVolume = 0;
-      currentWeekStart = workoutWeekStart;
-    }
-
-    // Process exercises
-    if (workout.exercises) {
-      const exercises = workout.exercises as unknown as Exercise[];
-      for (const exercise of exercises) {
-        const name = exercise.name;
-        if (!exerciseData[name]) {
-          exerciseData[name] = {
-            sessions: 0,
-            volumes: [],
-            maxWeight: 0,
-            totalSets: 0,
-            lastLoggedAt: workout.loggedAt,
-          };
-        }
-
-        exerciseData[name].sessions++;
-        exerciseData[name].lastLoggedAt = workout.loggedAt;
-
-        let sessionVolume = 0;
-        for (const set of exercise.sets) {
-          sessionVolume += set.weight * set.reps;
-          if (set.weight > exerciseData[name].maxWeight) {
-            exerciseData[name].maxWeight = set.weight;
-          }
-          exerciseData[name].totalSets++;
-        }
-        exerciseData[name].volumes.push(sessionVolume);
-        currentWeekVolume += sessionVolume;
-      }
-    }
-
-    // Add cardio/other workout volume if tracked
-    if (workout.totalVolume) {
-      currentWeekVolume += workout.totalVolume;
-    }
-  }
-
-  // Add final week
-  if (currentWeekVolume > 0) {
-    weeklyVolumes.push(currentWeekVolume);
-  }
-
-  // Calculate overall volume trend
-  let volumeTrend: 'increasing' | 'plateau' | 'declining' | 'insufficient_data' = 'insufficient_data';
-  if (weeklyVolumes.length >= 3) {
-    const firstHalf = weeklyVolumes.slice(0, Math.floor(weeklyVolumes.length / 2));
-    const secondHalf = weeklyVolumes.slice(Math.floor(weeklyVolumes.length / 2));
-    const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-    const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-
-    const changePercent = ((secondAvg - firstAvg) / firstAvg) * 100;
-    if (changePercent > 10) {
-      volumeTrend = 'increasing';
-    } else if (changePercent < -10) {
-      volumeTrend = 'declining';
-    } else {
-      volumeTrend = 'plateau';
-    }
-  }
-
-  // Build exercise progressions
-  const exerciseProgressions: ExerciseProgression[] = Object.entries(exerciseData)
-    .map(([name, data]) => {
-      let trend: 'increasing' | 'plateau' | 'declining' | 'insufficient_data' = 'insufficient_data';
-
-      if (data.volumes.length >= 3) {
-        const firstHalf = data.volumes.slice(0, Math.floor(data.volumes.length / 2));
-        const secondHalf = data.volumes.slice(Math.floor(data.volumes.length / 2));
-        const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-        const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-
-        const changePercent = ((secondAvg - firstAvg) / firstAvg) * 100;
-        if (changePercent > 10) {
-          trend = 'increasing';
-        } else if (changePercent < -10) {
-          trend = 'declining';
-        } else {
-          trend = 'plateau';
-        }
-      }
-
-      return {
-        exerciseName: name,
-        sessions: data.sessions,
-        volumeTrend: trend,
-        avgVolume: Math.round(data.volumes.reduce((a, b) => a + b, 0) / data.volumes.length),
-        maxWeight: data.maxWeight,
-        totalSets: data.totalSets,
-        weeklyFrequency: Math.round((data.sessions / weeks) * 10) / 10,
-      };
-    })
-    .sort((a, b) => b.sessions - a.sessions);
-
-  // Top exercises by frequency
-  const topExercises = exerciseProgressions.slice(0, 5).map(e => e.exerciseName);
-
   return {
     totalWorkouts: workouts.length,
     weeklyAverage,
-    exerciseProgressions: exerciseProgressions.slice(0, 10), // Top 10
-    topExercises,
     consistencyRate,
-    volumeTrend,
   };
 }
 
 /**
- * Format exercise progression for SMS display
+ * Format workout analytics for SMS display
  */
-export function formatExerciseProgressionForSMS(analytics: WorkoutAnalytics): string {
+export function formatWorkoutAnalyticsForSMS(analytics: WorkoutAnalytics): string {
   if (analytics.totalWorkouts === 0) {
     return "No workouts logged this month.";
   }
 
-  let message = `💪 Training Analytics (30 days)\n\n`;
+  let message = `Training Analytics (30 days)\n\n`;
   message += `Workouts: ${analytics.totalWorkouts} (${analytics.weeklyAverage}/week)\n`;
-  message += `Consistency: ${analytics.consistencyRate}%\n`;
-
-  if (analytics.volumeTrend !== 'insufficient_data') {
-    const trendEmoji = analytics.volumeTrend === 'increasing' ? '📈' :
-                       analytics.volumeTrend === 'declining' ? '📉' : '➡️';
-    message += `Volume trend: ${trendEmoji} ${analytics.volumeTrend}\n`;
-  }
-
-  if (analytics.exerciseProgressions.length > 0) {
-    message += `\nTop exercises:\n`;
-    for (const exercise of analytics.exerciseProgressions.slice(0, 3)) {
-      const trend = exercise.volumeTrend === 'increasing' ? '↑' :
-                   exercise.volumeTrend === 'declining' ? '↓' : '→';
-      message += `• ${exercise.exerciseName}: ${exercise.sessions}x, max ${exercise.maxWeight}lbs ${trend}\n`;
-    }
-  }
+  message += `Consistency: ${analytics.consistencyRate}%`;
 
   return message;
 }

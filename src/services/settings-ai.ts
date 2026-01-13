@@ -28,7 +28,6 @@ const SettingsChangeSchema = z.object({
     'dinner_time',
     'summary_time',
     'weigh_in_day',
-    'hydration_reminders',
     'pause_reminders',
     'resume_reminders',
     'breakfast_reminder_enabled',
@@ -170,7 +169,6 @@ export function isSettingsRequest(message: string): boolean {
     /\b(change|set|update)\b.*(target weight|goal weight)/i,
     /\b(change|set|update)\b.*(breakfast|lunch|dinner|summary)\b.*(time|reminder)/i,
     /\b(change|set|update)\b.*(weigh.?in|weigh in)\b.*(day)/i,
-    /\b(turn|switch)\b.*(on|off)\b.*(hydration|water)/i,
     /\b(pause|stop|disable)\b.*(reminder|notification)/i,
     /\b(resume|start|enable)\b.*(reminder|notification)/i,
     /\bmy timezone is\b/i,
@@ -220,7 +218,6 @@ AVAILABLE SETTINGS:
 - target_weight: number or "clear"
 - breakfast_time, lunch_time, dinner_time, summary_time: time like "9am" or "21:00"
 - weigh_in_day: day of week
-- hydration_reminders: on/off
 - pause_reminders: pause (with optional duration like "4h" or "until tomorrow")
 - resume_reminders: resume
 - breakfast_reminder_enabled: on/off (enable or disable breakfast reminder)
@@ -470,15 +467,6 @@ async function applySettingsChange(
         return { success: true, message: `Weigh-in day set to ${change.value}.` };
       }
       return { success: false, error: 'Please enter a day of the week.' };
-    }
-
-    case 'hydration_reminders': {
-      const enabled = ['on', 'yes', 'enable', 'true', '1'].includes(valueLower);
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { hydrationReminders: enabled },
-      });
-      return { success: true, message: `Hydration reminders ${enabled ? 'enabled' : 'disabled'}.` };
     }
 
     case 'pause_reminders': {

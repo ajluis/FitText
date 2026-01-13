@@ -372,7 +372,6 @@ Lunch reminder: ${formatTime(user.reminderLunchTime)}
 Dinner reminder: ${formatTime(user.reminderDinnerTime)}
 Daily summary: ${formatTime(user.dailySummaryTime)}
 Weigh-in day: ${DAY_DISPLAY[user.weighInDay]}
-Hydration reminders: ${user.hydrationReminders ? 'On' : 'Off'}
 
 What would you like to change?
 1️⃣ Timezone
@@ -380,8 +379,7 @@ What would you like to change?
 3️⃣ Meal reminder times
 4️⃣ Daily summary time
 5️⃣ Weigh-in day
-6️⃣ Hydration reminders
-7️⃣ Back to settings`;
+6️⃣ Back to settings`;
 }
 
 function getStatsMenu(user: User): string {
@@ -567,18 +565,6 @@ Reply with a new time (like '9pm' or '21:00')`);
 Currently: ${DAY_DISPLAY[user.weighInDay]}`);
       break;
     case 6:
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { hydrationReminders: !user.hydrationReminders },
-      });
-      await sendSMS(user.phone, `Hydration reminders ${!user.hydrationReminders ? 'enabled' : 'disabled'}.`);
-      // Refresh user and show menu
-      const updatedUser = await prisma.user.findUnique({ where: { id: user.id } });
-      if (updatedUser) {
-        await sendSMS(updatedUser.phone, getRemindersMenu(updatedUser));
-      }
-      break;
-    case 7:
       await updateSettingsState(user.id, { currentMenu: 'main' });
       await sendSMS(user.phone, getMainMenu());
       break;
@@ -587,7 +573,7 @@ Currently: ${DAY_DISPLAY[user.weighInDay]}`);
         await updateSettingsState(user.id, { currentMenu: 'main' });
         await sendSMS(user.phone, getMainMenu());
       } else {
-        await sendSMS(user.phone, "Reply with a number 1-7, or 'back'.");
+        await sendSMS(user.phone, "Reply with a number 1-6, or 'back'.");
       }
   }
 }

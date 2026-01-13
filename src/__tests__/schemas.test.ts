@@ -6,8 +6,6 @@ import { describe, it, expect } from 'vitest';
 import {
   FoodItemSchema,
   ParsedFoodResponseSchema,
-  ExerciseSetSchema,
-  ExerciseSchema,
   ParsedWorkoutResponseSchema,
   IntentClassificationSchema,
   ParsedWeightSchema,
@@ -123,34 +121,12 @@ describe('ParsedFoodResponseSchema', () => {
   });
 });
 
-describe('ExerciseSetSchema', () => {
-  it('validates valid sets', () => {
-    expect(ExerciseSetSchema.safeParse({ reps: 10, weight: 135 }).success).toBe(true);
-    expect(ExerciseSetSchema.safeParse({ reps: 5, weight: 0 }).success).toBe(true);
-    expect(ExerciseSetSchema.safeParse({ reps: 1 }).success).toBe(true);
-  });
-
-  it('rejects invalid sets', () => {
-    expect(ExerciseSetSchema.safeParse({ reps: 0, weight: 135 }).success).toBe(false);
-    expect(ExerciseSetSchema.safeParse({ reps: -5, weight: 135 }).success).toBe(false);
-    expect(ExerciseSetSchema.safeParse({ reps: 10, weight: -50 }).success).toBe(false);
-  });
-});
-
 describe('ParsedWorkoutResponseSchema', () => {
   it('validates strength workout', () => {
     const workout = {
       workoutType: 'strength',
-      exercises: [
-        {
-          name: 'Bench Press',
-          sets: [
-            { reps: 10, weight: 135 },
-            { reps: 8, weight: 155 },
-          ],
-        },
-      ],
       durationMinutes: 45,
+      simpleDescription: 'Upper body workout',
       confidence: 'high',
     };
 
@@ -161,14 +137,9 @@ describe('ParsedWorkoutResponseSchema', () => {
   it('validates cardio workout', () => {
     const workout = {
       workoutType: 'cardio',
-      exercises: [
-        {
-          name: 'Running',
-          duration: 30,
-          distance: 3,
-          distanceUnit: 'miles',
-        },
-      ],
+      cardioType: 'Running',
+      distance: 3,
+      distanceUnit: 'miles',
       durationMinutes: 30,
     };
 
@@ -179,7 +150,6 @@ describe('ParsedWorkoutResponseSchema', () => {
   it('rejects invalid workout types', () => {
     const workout = {
       workoutType: 'yoga', // Not in enum
-      exercises: [],
     };
 
     const result = ParsedWorkoutResponseSchema.safeParse(workout);
@@ -366,15 +336,14 @@ describe('validateWorkoutResponse', () => {
   it('returns parsed data for valid response', () => {
     const text = JSON.stringify({
       workoutType: 'strength',
-      exercises: [
-        { name: 'Squat', sets: [{ reps: 5, weight: 225 }] },
-      ],
+      simpleDescription: 'Upper body workout',
+      durationMinutes: 45,
     });
 
     const result = validateWorkoutResponse(text);
     expect(result).not.toBeNull();
     expect(result?.workoutType).toBe('strength');
-    expect(result?.exercises).toHaveLength(1);
+    expect(result?.simpleDescription).toBe('Upper body workout');
   });
 
   it('returns null for invalid response', () => {

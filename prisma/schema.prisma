@@ -78,7 +78,6 @@ enum ReminderType {
   dinner
   workout
   weigh_in
-  hydration
   daily_summary
   morning_checkin
   evening_checkin
@@ -164,7 +163,6 @@ model User {
   reminderWorkoutTime    String?
   dailySummaryTime       String              @default("21:00")
   weighInDay             WeekDay             @default(WE)
-  hydrationReminders     Boolean             @default(false)
   timezone               String              @default("America/New_York")
 
   // Engagement Tracking
@@ -282,15 +280,10 @@ model WorkoutEntry {
   distance                Float?
   distanceUnit            DistanceUnit?
 
-  // For Strength - stored as JSON
-  // Array of { name, sets: [{ reps, weight }] }
-  exercises               Json?
-
-  // Simple Mode
+  // Simple description
   simpleDescription       String?
 
   // Calculated
-  totalVolume             Int?          // sum of sets × reps × weight
   estimatedCaloriesBurned Int?
 
   @@index([userId, loggedAt])

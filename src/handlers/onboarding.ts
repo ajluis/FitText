@@ -49,7 +49,13 @@ async function sendOnboardingMessage(
 
 // Static messages
 const MESSAGES = {
-  welcome: `Hey this is Alex from FitText. Excited to get working with you.`,
+  welcome: `Hey! 👋 I'm FitText, your nutrition coach via text.
+
+Reply:
+1️⃣ Set up my goals (takes 2 min)
+2️⃣ Just start logging
+
+You can always customize later with /settings`,
 
   welcomeFollowup: `You can send me a photo of what you eat or just a description and I'll log it here to meet your goals. Can I ask a few questions first?`,
 
@@ -157,14 +163,10 @@ export async function startOnboarding(phone: string): Promise<void> {
     },
   });
 
-  // Send welcome sequence: 3 messages
-  // 1. Welcome message
+  // Send welcome message with choice
   await sendSMS(phone, MESSAGES.welcome);
 
-  // 2. Follow-up explaining the service
-  await sendSMS(phone, MESSAGES.welcomeFollowup);
-
-  // 3. Contact card (VCF)
+  // Send contact card (VCF)
   const vcfUrl = `${config.server.webhookBaseUrl}/static/coach.vcf`;
   console.log(`Sending VCF to ${phone}: ${vcfUrl}`);
   await sendSMS(phone, '', vcfUrl);
@@ -420,6 +422,39 @@ async function handleEscapeCommand(
 }
 
 /**
+ * Apply default values and complete onboarding for users who skip setup
+ */
+async function applyDefaultsAndComplete(user: User, stateId: string): Promise<void> {
+  // Update user with defaults
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      calorieTarget: 2000,
+      proteinTarget: 150,
+      primaryGoal: 'general_health',
+      onboardingComplete: true,
+    },
+  });
+
+  // Delete onboarding state
+  await prisma.onboardingState.delete({
+    where: { id: stateId },
+  });
+
+  // Send completion message
+  const skipCompleteMessage = `You're all set! 🎉
+
+Just text me what you eat:
+• "eggs and toast for breakfast"
+• "chipotle bowl"
+• Send a food photo
+
+I'll track your calories and protein. Customize anytime with /settings`;
+
+  await sendSMS(user.phone, skipCompleteMessage);
+}
+
+/**
  * Process onboarding message - main LLM-driven flow
  */
 export async function processOnboardingMessage(
@@ -429,8 +464,18 @@ export async function processOnboardingMessage(
   const state = await getOrCreateOnboardingState(user.id);
   const input = message.trim();
 
-  // Handle welcome response - any message moves to first question
+  // Handle welcome response - check for skip or proceed to goals
   if (state.currentStep === 'welcome') {
+    const lowerInput = input.toLowerCase();
+    const skipPatterns = ['2', 'skip', 'just log', 'start logging'];
+    const isSkip = skipPatterns.some(pattern => lowerInput === pattern || lowerInput.includes(pattern));
+
+    if (isSkip) {
+      await applyDefaultsAndComplete(user, state.id);
+      return;
+    }
+
+    // User wants to set up goals (replied "1", "goals", "set up", or anything else)
     await updateStep(user.id, 'awaiting_goal');
     await sendOnboardingMessage(user.phone, 'awaiting_goal', MESSAGES.firstQuestion);
     return;

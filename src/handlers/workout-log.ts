@@ -1,20 +1,10 @@
-import { User, WorkoutType, Prisma } from '@prisma/client';
+import { User, WorkoutType } from '@prisma/client';
 import prisma from '../lib/db';
 import anthropic, { CLAUDE_MODEL, MAX_TOKENS } from '../lib/claude';
 import { sendSMS } from '../services/sendblue';
 import { getTodayDate } from '../lib/calculations';
 
 // Types
-export interface ExerciseSet {
-  reps: number;
-  weight: number;
-}
-
-export interface Exercise {
-  name: string;
-  sets: ExerciseSet[];
-}
-
 export interface ParsedWorkout {
   workoutType: WorkoutType;
   durationMinutes?: number;
@@ -23,161 +13,9 @@ export interface ParsedWorkout {
   distance?: number;
   distanceUnit?: 'miles' | 'km';
   pace?: string;
-  // Strength
-  exercises?: Exercise[];
+  // Simple description of workout
   simpleDescription?: string;
-  // Calculated
-  totalVolume?: number;
   estimatedCaloriesBurned?: number;
-}
-
-// Common exercise name mappings
-const EXERCISE_ALIASES: Record<string, string> = {
-  'bench': 'Bench Press',
-  'bench press': 'Bench Press',
-  'bb bench': 'Bench Press',
-  'barbell bench': 'Bench Press',
-  'flat bench': 'Bench Press',
-  'incline bench': 'Incline Bench Press',
-  'incline': 'Incline Bench Press',
-  'decline bench': 'Decline Bench Press',
-  'squat': 'Squat',
-  'squats': 'Squat',
-  'back squat': 'Squat',
-  'bb squat': 'Squat',
-  'front squat': 'Front Squat',
-  'deadlift': 'Deadlift',
-  'deadlifts': 'Deadlift',
-  'dl': 'Deadlift',
-  'deads': 'Deadlift',
-  'rdl': 'Romanian Deadlift',
-  'rdls': 'Romanian Deadlift',
-  'romanian deadlift': 'Romanian Deadlift',
-  'ohp': 'Overhead Press',
-  'overhead press': 'Overhead Press',
-  'shoulder press': 'Overhead Press',
-  'military press': 'Overhead Press',
-  'rows': 'Barbell Row',
-  'row': 'Barbell Row',
-  'barbell row': 'Barbell Row',
-  'barbell rows': 'Barbell Row',
-  'bb rows': 'Barbell Row',
-  'bent over rows': 'Barbell Row',
-  'pullups': 'Pull-ups',
-  'pull ups': 'Pull-ups',
-  'pull-ups': 'Pull-ups',
-  'chinups': 'Chin-ups',
-  'chin ups': 'Chin-ups',
-  'chin-ups': 'Chin-ups',
-  'dips': 'Dips',
-  'curls': 'Bicep Curls',
-  'bicep curls': 'Bicep Curls',
-  'hammer curls': 'Hammer Curls',
-  'tricep pushdown': 'Tricep Pushdown',
-  'tricep pushdowns': 'Tricep Pushdown',
-  'lat pulldown': 'Lat Pulldown',
-  'lat pulldowns': 'Lat Pulldown',
-  'leg press': 'Leg Press',
-  'leg curl': 'Leg Curl',
-  'leg curls': 'Leg Curl',
-  'leg extension': 'Leg Extension',
-  'leg extensions': 'Leg Extension',
-  'calf raises': 'Calf Raises',
-  'calf raise': 'Calf Raises',
-  'lunges': 'Lunges',
-  'hip thrust': 'Hip Thrust',
-  'hip thrusts': 'Hip Thrust',
-};
-
-/**
- * Normalize exercise name
- */
-function normalizeExerciseName(name: string): string {
-  const lower = name.toLowerCase().trim();
-  return EXERCISE_ALIASES[lower] || name.charAt(0).toUpperCase() + name.slice(1);
-}
-
-/**
- * Parse set/rep/weight patterns
- * Examples: "135x10", "3x10 at 135", "135 3x10", "10, 8, 6 at 135"
- */
-function parseSetReps(input: string): ExerciseSet[] | null {
-  const sets: ExerciseSet[] = [];
-  const cleaned = input.toLowerCase().trim();
-
-  // Pattern: 135x10 or 135 x 10
-  const simpleMatch = cleaned.match(/(\d+)\s*x\s*(\d+)/g);
-  if (simpleMatch && simpleMatch.length === 1) {
-    const match = cleaned.match(/(\d+)\s*x\s*(\d+)/);
-    if (match) {
-      const weight = parseInt(match[1], 10);
-      const reps = parseInt(match[2], 10);
-      // If weight > reps, it's weight x reps; else it's sets x reps (need weight separately)
-      if (weight > reps) {
-        return [{ weight, reps }];
-      }
-    }
-  }
-
-  // Pattern: 3x10 at 135 or 3x10 @ 135 or 135 3x10
-  const setsRepsWeightMatch = cleaned.match(/(\d+)\s*x\s*(\d+)\s*(?:at|@)\s*(\d+)/);
-  if (setsRepsWeightMatch) {
-    const numSets = parseInt(setsRepsWeightMatch[1], 10);
-    const reps = parseInt(setsRepsWeightMatch[2], 10);
-    const weight = parseInt(setsRepsWeightMatch[3], 10);
-    for (let i = 0; i < numSets; i++) {
-      sets.push({ reps, weight });
-    }
-    return sets;
-  }
-
-  // Pattern: 135 3x10
-  const weightSetsRepsMatch = cleaned.match(/(\d+)\s+(\d+)\s*x\s*(\d+)/);
-  if (weightSetsRepsMatch) {
-    const weight = parseInt(weightSetsRepsMatch[1], 10);
-    const numSets = parseInt(weightSetsRepsMatch[2], 10);
-    const reps = parseInt(weightSetsRepsMatch[3], 10);
-    for (let i = 0; i < numSets; i++) {
-      sets.push({ reps, weight });
-    }
-    return sets;
-  }
-
-  // Pattern: Multiple sets like "135x10, 155x8, 175x6"
-  const multipleMatch = cleaned.match(/(\d+)\s*x\s*(\d+)/g);
-  if (multipleMatch && multipleMatch.length > 1) {
-    for (const m of multipleMatch) {
-      const parts = m.match(/(\d+)\s*x\s*(\d+)/);
-      if (parts) {
-        sets.push({ weight: parseInt(parts[1], 10), reps: parseInt(parts[2], 10) });
-      }
-    }
-    return sets;
-  }
-
-  // Pattern: "10, 8, 6 at 135" or "10/8/6 at 135"
-  const repsListMatch = cleaned.match(/(\d+(?:\s*[,\/]\s*\d+)+)\s*(?:at|@)\s*(\d+)/);
-  if (repsListMatch) {
-    const repsList = repsListMatch[1].split(/[,\/]/).map(r => parseInt(r.trim(), 10));
-    const weight = parseInt(repsListMatch[2], 10);
-    for (const reps of repsList) {
-      sets.push({ reps, weight });
-    }
-    return sets;
-  }
-
-  return null;
-}
-
-/**
- * Calculate total volume from exercises
- */
-function calculateTotalVolume(exercises: Exercise[]): number {
-  return exercises.reduce((total, exercise) => {
-    return total + exercise.sets.reduce((exTotal, set) => {
-      return exTotal + (set.reps * set.weight);
-    }, 0);
-  }, 0);
 }
 
 /**
@@ -189,13 +27,8 @@ async function parseWorkoutFromText(description: string): Promise<ParsedWorkout>
 Determine:
 1. Workout type: "strength", "cardio", "mixed", or "other"
 2. Duration in minutes (if mentioned)
-3. For cardio: type (running, cycling, etc.), distance, pace
-4. For strength: exercises with sets/reps/weight if provided
-
-Common patterns:
-- "Bench 135x10" = Bench Press, 1 set of 10 reps at 135 lbs
-- "Squat 225 3x5" = Squat, 3 sets of 5 reps at 225 lbs
-- "Ran 3 miles in 28 mins" = Running, 3 miles, calculate pace
+3. For cardio: type (running, cycling, etc.), distance
+4. A simple description of the workout
 
 Return JSON only:
 {
@@ -204,10 +37,7 @@ Return JSON only:
   "cardioType": string | null,
   "distance": number | null,
   "distanceUnit": "miles" | "km" | null,
-  "exercises": [
-    { "name": "Exercise Name", "sets": [{ "reps": 10, "weight": 135 }] }
-  ] | null,
-  "simpleDescription": "Brief description if no specific exercises parsed"
+  "simpleDescription": "Brief description of the workout"
 }`;
 
   try {
@@ -229,14 +59,8 @@ Return JSON only:
         cardioType: parsed.cardioType,
         distance: parsed.distance,
         distanceUnit: parsed.distanceUnit,
-        exercises: parsed.exercises,
-        simpleDescription: parsed.simpleDescription,
+        simpleDescription: parsed.simpleDescription || description,
       };
-
-      // Calculate total volume if we have exercises
-      if (workout.exercises && workout.exercises.length > 0) {
-        workout.totalVolume = calculateTotalVolume(workout.exercises);
-      }
 
       // Calculate pace for cardio
       if (workout.cardioType && workout.distance && workout.durationMinutes) {
@@ -317,16 +141,6 @@ function formatWorkoutResponse(workout: ParsedWorkout, weeklyCount: number, week
     } else if (workout.durationMinutes) {
       message += `Logged: ${workout.durationMinutes} minutes`;
     }
-  } else if (workout.exercises && workout.exercises.length > 0) {
-    // Detailed strength workout
-    message = `💪 Logged:\n`;
-    for (const exercise of workout.exercises) {
-      const setsStr = exercise.sets.map(s => `${s.weight}×${s.reps}`).join(', ');
-      message += `• ${exercise.name}: ${setsStr}\n`;
-    }
-    if (workout.totalVolume) {
-      message += `\nTotal volume: ${workout.totalVolume.toLocaleString()} lbs`;
-    }
   } else {
     // Simple workout
     message = `Logged: ${workout.simpleDescription || workout.workoutType} workout`;
@@ -364,90 +178,6 @@ async function getWeeklyWorkoutCount(user: User): Promise<number> {
   return count;
 }
 
-interface PRCheckResult {
-  exerciseName: string;
-  isPR: boolean;
-  currentBest: ExerciseSet;
-  previousBest?: string;
-}
-
-/**
- * Check for PRs across all exercises in a workout (single query optimization)
- * This replaces the old N+1 query pattern where we fetched workout history for each exercise
- */
-async function checkAllPRs(
-  user: User,
-  exercises: Exercise[]
-): Promise<PRCheckResult[]> {
-  if (!exercises || exercises.length === 0) {
-    return [];
-  }
-
-  // Single query to fetch workout history (instead of N queries)
-  const previousEntries = await prisma.workoutEntry.findMany({
-    where: {
-      userId: user.id,
-      exercises: { not: Prisma.DbNull },
-    },
-    orderBy: { loggedAt: 'desc' },
-    take: 50,
-  });
-
-  // Build a map of best scores for each exercise from history
-  const bestScoresByExercise = new Map<string, { score: number; set: ExerciseSet }>();
-
-  for (const entry of previousEntries) {
-    const entryExercises = entry.exercises as Exercise[] | null;
-    if (!entryExercises) continue;
-
-    for (const exercise of entryExercises) {
-      const name = exercise.name.toLowerCase();
-
-      for (const set of exercise.sets) {
-        const score = set.weight * set.reps;
-        const current = bestScoresByExercise.get(name);
-
-        if (!current || score > current.score) {
-          bestScoresByExercise.set(name, { score, set });
-        }
-      }
-    }
-  }
-
-  // Check each exercise in current workout against history
-  const results: PRCheckResult[] = [];
-
-  for (const exercise of exercises) {
-    if (!exercise.sets || exercise.sets.length === 0) continue;
-
-    // Get current best set
-    const currentBest = exercise.sets.reduce((best, set) => {
-      const score = set.weight * set.reps;
-      const bestScore = best.weight * best.reps;
-      return score > bestScore ? set : best;
-    }, exercise.sets[0]);
-
-    const currentScore = currentBest.weight * currentBest.reps;
-    const previousBestData = bestScoresByExercise.get(exercise.name.toLowerCase());
-
-    if (!previousBestData) {
-      // First time doing this exercise - could count as PR
-      continue;
-    }
-
-    if (currentScore > previousBestData.score) {
-      results.push({
-        exerciseName: exercise.name,
-        isPR: true,
-        currentBest,
-        previousBest: `${previousBestData.set.weight}×${previousBestData.set.reps}`,
-      });
-    }
-  }
-
-  return results;
-}
-
 /**
  * Handle workout logging
  */
@@ -471,9 +201,7 @@ export async function handleWorkoutLog(
       cardioType: parsed.cardioType,
       distance: parsed.distance,
       distanceUnit: parsed.distanceUnit,
-      exercises: parsed.exercises ? JSON.parse(JSON.stringify(parsed.exercises)) : undefined,
       simpleDescription: parsed.simpleDescription,
-      totalVolume: parsed.totalVolume,
       estimatedCaloriesBurned: parsed.estimatedCaloriesBurned,
     },
   });
@@ -491,19 +219,7 @@ export async function handleWorkoutLog(
   const weeklyCount = await getWeeklyWorkoutCount(user);
 
   // Format response
-  let response = formatWorkoutResponse(parsed, weeklyCount, user.weeklyWorkoutTarget);
-
-  // Check for PRs (single optimized query instead of N queries)
-  if (parsed.exercises && parsed.exercises.length > 0) {
-    const prResults = await checkAllPRs(user, parsed.exercises);
-
-    for (const pr of prResults) {
-      response += `\n\n${pr.exerciseName}: ${pr.currentBest.weight}×${pr.currentBest.reps} — that's a PR! 🎉`;
-      if (pr.previousBest) {
-        response += ` (up from ${pr.previousBest})`;
-      }
-    }
-  }
+  const response = formatWorkoutResponse(parsed, weeklyCount, user.weeklyWorkoutTarget);
 
   await sendSMS(user.phone, response);
 }
@@ -534,8 +250,6 @@ export async function getWeeklyWorkoutSummary(user: User): Promise<string> {
   const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   let message = "This week's training:\n";
 
-  let totalVolume = 0;
-
   for (const workout of workouts) {
     const day = days[workout.loggedAt.getDay()];
     let desc = '';
@@ -547,10 +261,6 @@ export async function getWeeklyWorkoutSummary(user: User): Promise<string> {
       }
     } else if (workout.simpleDescription) {
       desc = workout.simpleDescription;
-    } else if (workout.exercises) {
-      const exercises = workout.exercises as unknown as Exercise[];
-      desc = exercises.map(e => e.name).slice(0, 2).join(', ');
-      if (exercises.length > 2) desc += '...';
     } else {
       desc = workout.workoutType;
     }
@@ -560,19 +270,11 @@ export async function getWeeklyWorkoutSummary(user: User): Promise<string> {
     }
 
     message += `${day}: ${desc}\n`;
-
-    if (workout.totalVolume) {
-      totalVolume += workout.totalVolume;
-    }
   }
 
   message += `\n${workouts.length}/${user.weeklyWorkoutTarget} workouts`;
   if (workouts.length >= user.weeklyWorkoutTarget) {
     message += ' ✓';
-  }
-
-  if (totalVolume > 0) {
-    message += `\nTotal volume: ${totalVolume.toLocaleString()} lbs`;
   }
 
   return message;

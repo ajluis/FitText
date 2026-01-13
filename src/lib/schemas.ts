@@ -29,30 +29,17 @@ export type ParsedFoodResponseType = z.output<typeof ParsedFoodResponseSchema>;
 // WORKOUT PARSING SCHEMAS
 // ============================================
 
-export const ExerciseSetSchema = z.object({
-  reps: z.number().min(1).max(1000),
-  weight: z.number().min(0).max(2000).optional(),
-});
-
-export const ExerciseSchema = z.object({
-  name: z.string().min(1),
-  sets: z.array(ExerciseSetSchema).optional(),
-  reps: z.number().optional(), // For simple rep counts
-  weight: z.number().optional(), // For simple weight entries
-  duration: z.number().optional(), // For cardio (minutes)
-  distance: z.number().optional(), // For cardio
-  distanceUnit: z.enum(['miles', 'km']).optional(),
-});
-
 export const ParsedWorkoutResponseSchema = z.object({
   workoutType: z.enum(['strength', 'cardio', 'mixed', 'other']),
-  exercises: z.array(ExerciseSchema),
   durationMinutes: z.number().min(0).max(600).optional(),
+  cardioType: z.string().optional(),
+  distance: z.number().optional(),
+  distanceUnit: z.enum(['miles', 'km']).optional(),
+  simpleDescription: z.string().optional(),
   confidence: z.enum(['high', 'medium', 'low']).default('medium'),
   notes: z.string().optional(),
 });
 
-export type ExerciseType = z.output<typeof ExerciseSchema>;
 export type ParsedWorkoutResponseType = z.output<typeof ParsedWorkoutResponseSchema>;
 
 // ============================================

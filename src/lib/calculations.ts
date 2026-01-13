@@ -205,7 +205,9 @@ export function getCurrentTimeDecimal(timezone: string): number {
 export function getTodayDate(timezone: string): Date {
   const now = new Date();
   const dateString = now.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD format
-  return new Date(dateString);
+  // Parse as UTC date to avoid local timezone interpretation issues
+  const [year, month, day] = dateString.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
 }
 
 /**
