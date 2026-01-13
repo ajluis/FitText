@@ -566,13 +566,14 @@ function formatLoggedResponse(
 
   message += `\nTotal: ${parsed.totalCalories} cal, ${parsed.totalProtein}g protein`;
 
-  // Add daily totals
+  // Add daily totals (round to whole numbers to avoid floating point display issues)
   const calorieTarget = dailyLog.calorieTarget || 2000;
   const proteinTarget = dailyLog.proteinTarget || 150;
-  const caloriesRemaining = calorieTarget - dailyLog.caloriesTotal;
-  const proteinRemaining = proteinTarget - dailyLog.proteinTotal;
+  const caloriesRemaining = Math.round(calorieTarget - dailyLog.caloriesTotal);
+  const proteinRemaining = Math.round(proteinTarget - dailyLog.proteinTotal);
+  const proteinTotal = Math.round(dailyLog.proteinTotal);
 
-  message += `\n\nToday so far: ${dailyLog.caloriesTotal.toLocaleString()} cal, ${dailyLog.proteinTotal}g protein`;
+  message += `\n\nToday so far: ${dailyLog.caloriesTotal.toLocaleString()} cal, ${proteinTotal}g protein`;
   message += `\n(${caloriesRemaining > 0 ? caloriesRemaining.toLocaleString() : 0} cal, ${proteinRemaining > 0 ? proteinRemaining : 0}g protein remaining)`;
 
   return message;
@@ -1130,8 +1131,10 @@ export async function getTodaySummary(user: User): Promise<string> {
   const calorieTarget = dailyLog.calorieTarget || user.calorieTarget || 2000;
   const proteinTarget = dailyLog.proteinTarget || user.proteinTarget || 150;
 
-  const caloriesRemaining = Math.max(0, calorieTarget - dailyLog.caloriesTotal);
-  const proteinRemaining = Math.max(0, proteinTarget - dailyLog.proteinTotal);
+  // Round to whole numbers to avoid floating point display issues
+  const caloriesRemaining = Math.round(Math.max(0, calorieTarget - dailyLog.caloriesTotal));
+  const proteinRemaining = Math.round(Math.max(0, proteinTarget - dailyLog.proteinTotal));
+  const proteinTotal = Math.round(dailyLog.proteinTotal);
 
   const calPct = percentage(dailyLog.caloriesTotal, calorieTarget);
   const protPct = percentage(dailyLog.proteinTotal, proteinTarget);
@@ -1144,7 +1147,7 @@ export async function getTodaySummary(user: User): Promise<string> {
 
   let message = `Today so far:\n`;
   message += `🔥 ${dailyLog.caloriesTotal.toLocaleString()} / ${calorieTarget.toLocaleString()} cal (${caloriesRemaining.toLocaleString()} remaining)\n`;
-  message += `💪 ${dailyLog.proteinTotal} / ${proteinTarget}g protein (${proteinRemaining}g remaining)\n\n`;
+  message += `💪 ${proteinTotal} / ${proteinTarget}g protein (${proteinRemaining}g remaining)\n\n`;
   message += `Meals logged: ${meals}`;
 
   // Add contextual tip
