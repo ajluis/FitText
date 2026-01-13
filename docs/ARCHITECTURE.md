@@ -116,7 +116,6 @@ SENDBLUE_API_KEY      # Sendblue credentials
 SENDBLUE_API_SECRET
 SENDBLUE_PHONE_NUMBER # App's phone number
 ANTHROPIC_API_KEY     # Claude API
-USDA_API_KEY          # Food database lookup
 WEBHOOK_BASE_URL      # Public URL for webhooks
 BUILD_ADMIN_PHONES    # Comma-separated admin phones for /build
 GITHUB_TOKEN          # GitHub PAT for git operations

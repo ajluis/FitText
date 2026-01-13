@@ -12,7 +12,6 @@ process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
 process.env.SENDBLUE_API_KEY = 'test-sendblue-key';
 process.env.SENDBLUE_API_SECRET = 'test-sendblue-secret';
 process.env.SENDBLUE_PHONE_NUMBER = '+15551234567';
-process.env.USDA_API_KEY = 'test-usda-key';
 process.env.WEBHOOK_BASE_URL = 'https://test.example.com';
 process.env.PORT = '3000';
 process.env.NODE_ENV = 'test';

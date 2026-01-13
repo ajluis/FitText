@@ -20,7 +20,6 @@ SMS-based fitness and nutrition coaching system. Track food, log workouts, and s
 - **Job Queue**: BullMQ + Redis
 - **SMS**: Sendblue
 - **AI**: Anthropic Claude (chat + vision)
-- **Nutrition Data**: USDA FoodData Central
 
 ## Quick Start
 
@@ -31,7 +30,6 @@ SMS-based fitness and nutrition coaching system. Track food, log workouts, and s
 - Redis instance
 - Sendblue account with API credentials
 - Anthropic API key
-- USDA API key
 
 ### Installation
 
@@ -71,7 +69,6 @@ REDIS_URL="redis://localhost:6379"
 SENDBLUE_API_KEY="your-sendblue-api-key"
 SENDBLUE_API_SECRET="your-sendblue-api-secret"
 ANTHROPIC_API_KEY="your-anthropic-api-key"
-USDA_API_KEY="your-usda-api-key"
 PORT=3000
 WEBHOOK_BASE_URL="https://your-domain.com"
 ```
@@ -153,7 +150,6 @@ src/
 │   ├── db.ts         # Prisma client
 │   ├── redis.ts      # Redis client
 │   ├── claude.ts     # Anthropic client
-│   ├── usda.ts       # USDA API client
 │   └── calculations.ts# TDEE, parsing, etc.
 ├── routes/           # Express routes
 │   └── webhooks.ts   # Sendblue webhooks

@@ -7,7 +7,6 @@ const envSchema = z.object({
   SENDBLUE_API_SECRET: z.string(),
   SENDBLUE_PHONE_NUMBER: z.string(),
   ANTHROPIC_API_KEY: z.string(),
-  USDA_API_KEY: z.string(),
   PORT: z.string().default('3000'),
   WEBHOOK_BASE_URL: z.string(),
   // Build mode (optional)
@@ -37,9 +36,6 @@ function loadConfig() {
     },
     anthropic: {
       apiKey: parsed.data.ANTHROPIC_API_KEY,
-    },
-    usda: {
-      apiKey: parsed.data.USDA_API_KEY,
     },
     server: {
       port: parseInt(parsed.data.PORT, 10),

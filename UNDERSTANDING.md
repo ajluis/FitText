@@ -67,7 +67,6 @@ FitText is an **SMS-based fitness and nutrition coaching system** that enables u
 | Job Queue | BullMQ + Redis |
 | SMS Delivery | Sendblue API |
 | AI/Vision | Anthropic Claude |
-| Nutrition Data | USDA FoodData Central API |
 | Validation | Zod |
 
 ### Repository Structure
@@ -88,7 +87,6 @@ src/
 │   ├── db.ts                 # Prisma client
 │   ├── redis.ts              # Redis client
 │   ├── claude.ts             # Anthropic Claude client
-│   ├── usda.ts               # USDA nutrition API
 │   └── calculations.ts       # TDEE, parsing utilities
 ├── routes/                    # Express routes
 │   └── webhooks.ts           # Sendblue SMS webhooks

@@ -15,7 +15,6 @@ const EnvSchema = z.object({
   SENDBLUE_API_KEY: z.string().min(1, 'SENDBLUE_API_KEY is required'),
   SENDBLUE_API_SECRET: z.string().min(1, 'SENDBLUE_API_SECRET is required'),
   SENDBLUE_PHONE_NUMBER: z.string().min(1, 'SENDBLUE_PHONE_NUMBER is required'),
-  USDA_API_KEY: z.string().optional(),
   PORT: z.string().regex(/^\d+$/).transform(Number).default('3000'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 });
