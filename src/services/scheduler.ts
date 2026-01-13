@@ -205,9 +205,11 @@ async function checkMealReminders(): Promise<void> {
       }
 
       // Check dinner reminder (only if enabled)
+      // Add upper bound of 23:30 to prevent midnight edge cases
       if (
         user.reminderDinnerEnabled &&
         currentTime >= user.reminderDinnerTime &&
+        currentTime < '23:30' &&
         (!dailyLog || !dailyLog.dinnerLogged)
       ) {
         const alreadySent = await wasReminderSentToday(user.id, 'dinner', user.timezone);
