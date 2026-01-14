@@ -6,7 +6,9 @@ const envSchema = z.object({
   SENDBLUE_API_KEY: z.string(),
   SENDBLUE_API_SECRET: z.string(),
   SENDBLUE_PHONE_NUMBER: z.string(),
-  ANTHROPIC_API_KEY: z.string(),
+  GOOGLE_AI_API_KEY: z.string(),
+  // Keep ANTHROPIC_API_KEY optional during migration
+  ANTHROPIC_API_KEY: z.string().optional(),
   PORT: z.string().default('3000'),
   WEBHOOK_BASE_URL: z.string(),
   // Build mode (optional)
@@ -34,8 +36,11 @@ function loadConfig() {
       apiSecret: parsed.data.SENDBLUE_API_SECRET,
       phoneNumber: parsed.data.SENDBLUE_PHONE_NUMBER,
     },
+    google: {
+      apiKey: parsed.data.GOOGLE_AI_API_KEY,
+    },
     anthropic: {
-      apiKey: parsed.data.ANTHROPIC_API_KEY,
+      apiKey: parsed.data.ANTHROPIC_API_KEY || '',
     },
     server: {
       port: parseInt(parsed.data.PORT, 10),

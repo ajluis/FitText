@@ -1,11 +1,11 @@
 import { User, PrimaryGoal, CoachingPersonality } from '@prisma/client';
 import prisma from '../lib/db';
-import anthropic, {
-  CLAUDE_MODEL,
-  MAX_TOKENS,
-  callClaudeWithRetry,
+import genai, {
+  GEMINI_MODEL,
+  MAX_OUTPUT_TOKENS,
+  callGeminiWithRetry,
   getUserFriendlyErrorMessage,
-} from '../lib/claude';
+} from '../lib/gemini';
 import { sendSMS } from './sendblue';
 import { getTodayDate, percentage } from '../lib/calculations';
 
@@ -277,18 +277,15 @@ export async function handleQuestion(
 ): Promise<void> {
   const systemPrompt = await buildSystemPrompt(user);
 
-  const result = await callClaudeWithRetry(
+  const result = await callGeminiWithRetry(
     () =>
-      anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: MAX_TOKENS.question,
-        system: systemPrompt,
-        messages: [
-          {
-            role: 'user',
-            content: question,
-          },
-        ],
+      genai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: question,
+        config: {
+          systemInstruction: systemPrompt,
+          maxOutputTokens: MAX_OUTPUT_TOKENS.question,
+        },
       }),
     { label: 'Coaching question' }
   );
@@ -298,7 +295,7 @@ export async function handleQuestion(
     return;
   }
 
-  const text = result.data!.content[0].type === 'text' ? result.data!.content[0].text : '';
+  const text = result.data?.text ?? '';
   if (text) {
     await sendSMS(user.phone, text);
   } else {
@@ -456,18 +453,15 @@ export async function handleFreeform(
   // For anything else, use the coaching AI
   const systemPrompt = await buildSystemPrompt(user);
 
-  const result = await callClaudeWithRetry(
+  const result = await callGeminiWithRetry(
     () =>
-      anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: MAX_TOKENS.coaching,
-        system: systemPrompt + `\n\nThe user is sharing something casually. Respond warmly and briefly. If they seem to be venting or struggling, acknowledge their feelings.`,
-        messages: [
-          {
-            role: 'user',
-            content: message,
-          },
-        ],
+      genai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: message,
+        config: {
+          systemInstruction: systemPrompt + `\n\nThe user is sharing something casually. Respond warmly and briefly. If they seem to be venting or struggling, acknowledge their feelings.`,
+          maxOutputTokens: MAX_OUTPUT_TOKENS.coaching,
+        },
       }),
     { label: 'Freeform coaching' }
   );
@@ -478,7 +472,7 @@ export async function handleFreeform(
     return;
   }
 
-  const text = result.data!.content[0].type === 'text' ? result.data!.content[0].text : '';
+  const text = result.data?.text ?? '';
   if (text) {
     await sendSMS(user.phone, text);
   } else {

@@ -6,6 +6,7 @@ import prisma from './lib/db';
 import { getRedisConnection } from './lib/redis';
 import webhookRoutes from './routes/webhooks';
 import { startScheduler, stopScheduler } from './services/scheduler';
+import { startBatchWorker, stopBatchWorker } from './services/message-batcher';
 import logger, {
   generateRequestId,
   createRequestLogger,
@@ -146,6 +147,9 @@ async function shutdown(signal: string) {
   // Stop scheduler
   await stopScheduler();
 
+  // Stop batch worker
+  await stopBatchWorker();
+
   // Disconnect from database
   await prisma.$disconnect();
   logger.info('Database disconnected');
@@ -166,6 +170,10 @@ async function main() {
     // Start the scheduler
     await startScheduler();
     logger.info('Scheduler started');
+
+    // Start the message batch worker
+    startBatchWorker();
+    logger.info('Message batch worker started');
 
     // Start the HTTP server
     server = app.listen(config.server.port, () => {

@@ -1,12 +1,12 @@
 import { User, MealType, FoodInputType, Prisma } from '@prisma/client';
 import prisma from '../lib/db';
-import anthropic, {
-  CLAUDE_MODEL,
-  CLAUDE_VISION_MODEL,
-  MAX_TOKENS,
-  callClaudeWithRetry,
+import genai, {
+  GEMINI_MODEL,
+  GEMINI_VISION_MODEL,
+  MAX_OUTPUT_TOKENS,
+  callGeminiWithRetry,
   getUserFriendlyErrorMessage,
-} from '../lib/claude';
+} from '../lib/gemini';
 import { fetchWithTimeout } from '../lib/fetch-with-timeout';
 import { sendSMS, sendSMSWithEffect, SendStyle } from '../services/sendblue';
 import { getTodayDate, getCurrentTimeDecimal, percentage } from '../lib/calculations';
@@ -195,13 +195,15 @@ Return JSON only:
   "targetDate": "today" | "yesterday" | "YYYY-MM-DD"
 }`;
 
-  const result = await callClaudeWithRetry(
+  const result = await callGeminiWithRetry(
     () =>
-      anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: MAX_TOKENS.foodParsing,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: description }],
+      genai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: description,
+        config: {
+          systemInstruction: systemPrompt,
+          maxOutputTokens: MAX_OUTPUT_TOKENS.foodParsing,
+        },
       }),
     { label: 'Food text parsing' }
   );
@@ -217,8 +219,7 @@ Return JSON only:
     };
   }
 
-  const response = result.data!;
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const text = result.data?.text ?? '';
   const jsonMatch = text.match(/\{[\s\S]*\}/);
 
   if (!jsonMatch) {
@@ -444,30 +445,27 @@ Return JSON only:
     };
   }
 
-  const result = await callClaudeWithRetry(
+  const result = await callGeminiWithRetry(
     () =>
-      anthropic.messages.create({
-        model: CLAUDE_VISION_MODEL,
-        max_tokens: MAX_TOKENS.foodParsing,
-        messages: [
+      genai.models.generateContent({
+        model: GEMINI_VISION_MODEL,
+        contents: [
           {
             role: 'user',
-            content: [
+            parts: [
+              { text: systemPrompt },
               {
-                type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: mediaType,
+                inlineData: {
+                  mimeType: mediaType,
                   data: base64Image,
                 },
-              },
-              {
-                type: 'text',
-                text: systemPrompt,
               },
             ],
           },
         ],
+        config: {
+          maxOutputTokens: MAX_OUTPUT_TOKENS.foodParsing,
+        },
       }),
     { label: 'Food photo parsing' }
   );
@@ -488,8 +486,7 @@ Return JSON only:
     };
   }
 
-  const response = result.data!;
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const text = result.data?.text ?? '';
   const jsonMatch = text.match(/\{[\s\S]*\}/);
 
   if (!jsonMatch) {
@@ -766,13 +763,15 @@ Return JSON only:
   "updatedItem": { "name": "food name", "quantity": "amount", "calories": number, "protein": number }
 }`;
 
-  const result = await callClaudeWithRetry(
+  const result = await callGeminiWithRetry(
     () =>
-      anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: MAX_TOKENS.foodParsing,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: correctionMessage }],
+      genai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: correctionMessage,
+        config: {
+          systemInstruction: systemPrompt,
+          maxOutputTokens: MAX_OUTPUT_TOKENS.foodParsing,
+        },
       }),
     { label: 'Food correction parsing' }
   );
@@ -781,8 +780,7 @@ Return JSON only:
     return { success: false, error: 'Failed to parse correction' };
   }
 
-  const response = result.data!;
-  const text = response.content[0].type === 'text' ? response.content[0].text : '';
+  const text = result.data?.text ?? '';
   const jsonMatch = text.match(/\{[\s\S]*\}/);
 
   if (!jsonMatch) {

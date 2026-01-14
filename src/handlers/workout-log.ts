@@ -1,6 +1,6 @@
 import { User, WorkoutType } from '@prisma/client';
 import prisma from '../lib/db';
-import anthropic, { CLAUDE_MODEL, MAX_TOKENS } from '../lib/claude';
+import genai, { GEMINI_MODEL, MAX_OUTPUT_TOKENS } from '../lib/gemini';
 import { sendSMS } from '../services/sendblue';
 import { getTodayDate } from '../lib/calculations';
 
@@ -41,14 +41,16 @@ Return JSON only:
 }`;
 
   try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: MAX_TOKENS.workoutParsing,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: description }],
+    const response = await genai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: description,
+      config: {
+        systemInstruction: systemPrompt,
+        maxOutputTokens: MAX_OUTPUT_TOKENS.workoutParsing,
+      },
     });
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
+    const text = response.text ?? '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {

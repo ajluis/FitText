@@ -6,7 +6,7 @@
  */
 import { User, PrimaryGoal, ActivityLevel, WeekDay, AccountabilityLevel, CoachingPersonality } from '@prisma/client';
 import prisma from '../lib/db';
-import anthropic, { CLAUDE_MODEL, callClaudeWithRetry } from '../lib/claude';
+import genai, { GEMINI_MODEL, callGeminiWithRetry } from '../lib/gemini';
 import { parseAndValidate } from '../lib/schemas';
 import { calculateTargets } from '../lib/calculations';
 import { z } from 'zod';
@@ -236,12 +236,14 @@ Return JSON only:
 
 If you can't determine what they want to change, return null.`;
 
-  const result = await callClaudeWithRetry(
-    () => anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: 200,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: message }],
+  const result = await callGeminiWithRetry(
+    () => genai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: message,
+      config: {
+        systemInstruction: systemPrompt,
+        maxOutputTokens: 200,
+      },
     }),
     { label: 'Settings parsing' }
   );
@@ -250,7 +252,7 @@ If you can't determine what they want to change, return null.`;
     return null;
   }
 
-  const text = result.data.content[0].type === 'text' ? result.data.content[0].text : '';
+  const text = result.data.text ?? '';
 
   if (text.toLowerCase().includes('null')) {
     return null;

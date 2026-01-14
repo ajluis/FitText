@@ -1,12 +1,12 @@
 /**
  * Build mode AI service
  *
- * Handles Claude conversations for code editing via SMS.
- * Uses tool_use to let Claude read/write files.
+ * Handles Gemini conversations for code editing via SMS.
+ * Uses function calling to let Gemini read/write files.
  */
-import Anthropic from '@anthropic-ai/sdk';
+import { Content, FunctionDeclaration, Part } from '@google/genai';
 import { Prisma } from '@prisma/client';
-import anthropic, { CLAUDE_MODEL } from '../lib/claude';
+import genai, { GEMINI_MODEL } from '../lib/gemini';
 import { BUILD_TOOLS, executeTool } from './build-tools';
 import prisma from '../lib/db';
 import { config } from '../config';
@@ -47,6 +47,14 @@ You have tools to:
 - You cannot access .env, node_modules, or .git
 - All writes commit directly to main branch
 - Be careful and deliberate with changes`;
+
+// Convert Claude tool format to Gemini function declarations
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const GEMINI_TOOLS = BUILD_TOOLS.map(tool => ({
+  name: tool.name,
+  description: tool.description,
+  parameters: tool.input_schema,
+})) as any as FunctionDeclaration[];
 
 interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -91,10 +99,10 @@ export async function processBuildMessage(
     timestamp: new Date().toISOString(),
   });
 
-  // Build messages for Claude
-  const messages: Anthropic.MessageParam[] = history.map(msg => ({
-    role: msg.role,
-    content: msg.content,
+  // Build Gemini contents from history
+  const contents: Content[] = history.map(msg => ({
+    role: msg.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: msg.content }],
   }));
 
   let toolCallCount = session.toolCallCount;
@@ -102,77 +110,91 @@ export async function processBuildMessage(
   let commitsMade = session.commitsMade;
 
   try {
-    // Call Claude with tools
-    let response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: 4096,
-      system: BUILD_SYSTEM_PROMPT,
-      messages,
-      tools: BUILD_TOOLS as Anthropic.Tool[],
+    // Call Gemini with tools
+    let response = await genai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents,
+      config: {
+        systemInstruction: BUILD_SYSTEM_PROMPT,
+        maxOutputTokens: 4096,
+        tools: [{ functionDeclarations: GEMINI_TOOLS }],
+      },
     });
 
     // Process tool calls in a loop
-    while (response.stop_reason === 'tool_use') {
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    while (response.functionCalls && response.functionCalls.length > 0) {
+      const functionResponses: Part[] = [];
 
-      for (const block of response.content) {
-        if (block.type !== 'tool_use') continue;
-
+      for (const call of response.functionCalls) {
         toolCallCount++;
+        const toolName = call.name ?? 'unknown';
 
         try {
           const result = await executeTool(
-            block.name,
-            block.input as Record<string, unknown>
+            toolName,
+            call.args as Record<string, unknown>
           );
 
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: result.substring(0, 5000), // Limit result size
+          functionResponses.push({
+            functionResponse: {
+              name: call.name,
+              response: { result: result.substring(0, 5000) }, // Limit result size
+            },
           });
 
           // Track file modifications and commits
-          if (block.name === 'write_file') {
-            const filePath = (block.input as { file_path: string }).file_path;
+          if (call.name === 'write_file') {
+            const filePath = (call.args as { file_path: string }).file_path;
             if (!filesModified.includes(filePath)) {
               filesModified.push(filePath);
             }
             commitsMade++;
           }
         } catch (error) {
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: block.id,
-            content: `Error: ${(error as Error).message}`,
-            is_error: true,
+          functionResponses.push({
+            functionResponse: {
+              name: call.name,
+              response: { error: (error as Error).message },
+            },
           });
         }
       }
 
+      // Get the model's response parts for context
+      const modelResponseParts: Part[] = [];
+      if (response.text) {
+        modelResponseParts.push({ text: response.text });
+      }
+      // Include function call parts so the model knows what it called
+      for (const call of response.functionCalls) {
+        modelResponseParts.push({
+          functionCall: {
+            name: call.name,
+            args: call.args,
+          },
+        });
+      }
+
       // Continue conversation with tool results
-      const newMessages: Anthropic.MessageParam[] = [
-        ...messages,
-        { role: 'assistant', content: response.content },
-        { role: 'user', content: toolResults },
+      const newContents: Content[] = [
+        ...contents,
+        { role: 'model', parts: modelResponseParts },
+        { role: 'user', parts: functionResponses },
       ];
 
-      response = await anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: 4096,
-        system: BUILD_SYSTEM_PROMPT,
-        messages: newMessages,
-        tools: BUILD_TOOLS as Anthropic.Tool[],
+      response = await genai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: newContents,
+        config: {
+          systemInstruction: BUILD_SYSTEM_PROMPT,
+          maxOutputTokens: 4096,
+          tools: [{ functionDeclarations: GEMINI_TOOLS }],
+        },
       });
     }
 
     // Extract final text response
-    let assistantContent = '';
-    for (const block of response.content) {
-      if (block.type === 'text') {
-        assistantContent += block.text;
-      }
-    }
+    const assistantContent = response.text ?? '';
 
     // Add assistant response to history
     history.push({

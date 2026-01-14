@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { parseInboundWebhook } from '../services/sendblue';
-import { handleInboundMessage } from '../handlers';
+import { addMessageToBatch } from '../services/message-batcher';
 import logger from '../lib/logger';
 
 const router = Router();
@@ -56,11 +56,11 @@ router.post('/sendblue/inbound', async (req: Request, res: Response) => {
     // We respond immediately to avoid webhook timeout
     res.status(200).json({ status: 'received' });
 
-    // Handle the message
-    await handleInboundMessage(
+    // Add message to batch (will be processed after 2-second debounce)
+    await addMessageToBatch(
       webhook.from_number,
       webhook.content || '',
-      webhook.media_url
+      webhook.media_url || null
     );
 
     logger.info({ event: 'message_processed', phone: phone.slice(-4) }, 'Message processed');

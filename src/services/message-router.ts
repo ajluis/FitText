@@ -1,5 +1,5 @@
 import { User } from '@prisma/client';
-import anthropic, { CLAUDE_MODEL, MAX_TOKENS } from '../lib/claude';
+import genai, { GEMINI_MODEL, MAX_OUTPUT_TOKENS } from '../lib/gemini';
 import { isSettingsRequest } from './settings-ai';
 
 // Intent types
@@ -260,16 +260,16 @@ ${context?.lastIntent ? `Context: The last interaction was a "${context.lastInte
 Respond with JSON only: {"intent": "...", "confidence": "high|medium|low"}`;
 
   try {
-    const response = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: MAX_TOKENS.classification,
-      messages: [
-        { role: 'user', content: message }
-      ],
-      system: systemPrompt,
+    const response = await genai.models.generateContent({
+      model: GEMINI_MODEL,
+      contents: message,
+      config: {
+        systemInstruction: systemPrompt,
+        maxOutputTokens: MAX_OUTPUT_TOKENS.classification,
+      },
     });
 
-    const text = response.content[0].type === 'text' ? response.content[0].text : '';
+    const text = response.text ?? '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
 
     if (jsonMatch) {

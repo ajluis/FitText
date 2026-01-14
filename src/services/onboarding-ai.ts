@@ -5,11 +5,11 @@
  * making the setup flow more flexible and conversational.
  */
 import { User, OnboardingStep, PrimaryGoal, ActivityLevel, Sex } from '@prisma/client';
-import anthropic, {
-  CLAUDE_MODEL,
-  callClaudeWithRetry,
+import genai, {
+  GEMINI_MODEL,
+  callGeminiWithRetry,
   getUserFriendlyErrorMessage,
-} from '../lib/claude';
+} from '../lib/gemini';
 import { parseAndValidate } from '../lib/schemas';
 import { z } from 'zod';
 
@@ -273,23 +273,18 @@ Return JSON only (no markdown, no explanation):
   "nextFieldToAsk": "${nextField}" | null
 }`;
 
-  const result = await callClaudeWithRetry(
+  const result = await callGeminiWithRetry(
     async () => {
-      const response = await anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: MAX_TOKENS_ONBOARDING,
-        messages: [
-          { role: 'user', content: message },
-        ],
-        system: systemPrompt,
+      const response = await genai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: message,
+        config: {
+          systemInstruction: systemPrompt,
+          maxOutputTokens: MAX_TOKENS_ONBOARDING,
+        },
       });
 
-      const content = response.content[0];
-      if (content.type !== 'text') {
-        throw new Error('Unexpected response type from Claude');
-      }
-
-      return content.text;
+      return response.text ?? '';
     },
     { label: 'Onboarding AI processing' }
   );
