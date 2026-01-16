@@ -9,6 +9,7 @@
 import { Queue, Worker, Job } from 'bullmq';
 import redis from '../lib/redis';
 import { handleInboundMessage } from '../handlers';
+import { sendTypingIndicator } from './sendblue';
 import { config } from '../config';
 import logger from '../lib/logger';
 
@@ -150,6 +151,9 @@ async function processBatch(job: Job<BatchJobData>): Promise<void> {
     { event: 'batch_processing', phone: phone.slice(-4), messageCount: messages.length },
     `Processing batch of ${messages.length} message(s) for ***${phone.slice(-4)}`
   );
+
+  // Send typing indicator to show user we're processing (iMessage only)
+  await sendTypingIndicator(phone);
 
   // Combine text content (join with newlines)
   const combinedContent = messages
