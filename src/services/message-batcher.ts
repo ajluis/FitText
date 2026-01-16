@@ -92,8 +92,8 @@ export async function addMessageToBatch(
   await redis.rpush(`${batchKey}:messages`, JSON.stringify(message));
   await redis.expire(`${batchKey}:messages`, BATCH_TTL_SECONDS);
 
-  logger.debug(
-    { event: 'batch_message_added', phone: phone.slice(-4), hasMedia: !!mediaUrl },
+  logger.info(
+    { event: 'batch_message_added', phone: phone.slice(-4), hasMedia: !!mediaUrl, batchKey },
     `Added message to batch for ***${phone.slice(-4)}`
   );
 
@@ -101,10 +101,11 @@ export async function addMessageToBatch(
   const existingJob = await batchQueue.getJob(jobId);
   if (existingJob) {
     const state = await existingJob.getState();
+    logger.info({ event: 'batch_existing_job', jobId, state }, `Existing job state: ${state}`);
     // Only remove if it's still delayed (not yet processing)
     if (state === 'delayed' || state === 'waiting') {
       await existingJob.remove();
-      logger.debug(
+      logger.info(
         { event: 'batch_job_cancelled', phone: phone.slice(-4) },
         `Cancelled existing batch job for ***${phone.slice(-4)}`
       );
@@ -112,13 +113,13 @@ export async function addMessageToBatch(
   }
 
   // 3. Schedule new job with fresh 2-second delay
-  await batchQueue.add('process-batch', { phone, batchKey }, {
+  const newJob = await batchQueue.add('process-batch', { phone, batchKey }, {
     delay: BATCH_DELAY_MS,
     jobId,
   });
 
-  logger.debug(
-    { event: 'batch_job_scheduled', phone: phone.slice(-4), delayMs: BATCH_DELAY_MS },
+  logger.info(
+    { event: 'batch_job_scheduled', phone: phone.slice(-4), delayMs: BATCH_DELAY_MS, jobId: newJob.id },
     `Scheduled batch processing in ${BATCH_DELAY_MS}ms for ***${phone.slice(-4)}`
   );
 }
@@ -127,6 +128,8 @@ export async function addMessageToBatch(
  * Process a batch of messages after the delay expires
  */
 async function processBatch(job: Job<BatchJobData>): Promise<void> {
+  logger.info({ event: 'batch_job_started', jobId: job.id, jobName: job.name }, `Processing job ${job.id}`);
+
   const { phone, batchKey } = job.data;
   const messagesKey = `${batchKey}:messages`;
 
