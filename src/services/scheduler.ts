@@ -19,11 +19,17 @@ interface ReminderJobData {
   type: JobType;
 }
 
-// Redis connection options for BullMQ
+// Parse Redis URL for BullMQ connection
+// BullMQ requires explicit connection options, not just a URL string
+const redisUrl = new URL(config.redis.url);
 const redisConnection = {
-  host: new URL(config.redis.url).hostname || 'localhost',
-  port: parseInt(new URL(config.redis.url).port || '6379', 10),
-  password: new URL(config.redis.url).password || undefined,
+  host: redisUrl.hostname,
+  port: parseInt(redisUrl.port || '6379', 10),
+  password: redisUrl.password || undefined,
+  username: redisUrl.username || undefined,
+  // Enable TLS if the URL uses rediss:// protocol
+  tls: redisUrl.protocol === 'rediss:' ? {} : undefined,
+  maxRetriesPerRequest: null, // Required for BullMQ
 };
 
 // Create queue
@@ -734,6 +740,10 @@ export async function startScheduler(): Promise<void> {
 
   worker.on('failed', (job, err) => {
     console.error(`Reminder job failed: ${job?.id}`, err);
+  });
+
+  worker.on('error', (err) => {
+    console.error(`Scheduler worker error: ${err.message}`);
   });
 
   // Schedule recurring jobs

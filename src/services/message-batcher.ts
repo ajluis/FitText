@@ -15,11 +15,17 @@ import logger from '../lib/logger';
 const BATCH_DELAY_MS = 2000; // 2 seconds
 const BATCH_TTL_SECONDS = 600; // 10 minutes safety TTL
 
-// Redis connection options for BullMQ (same pattern as scheduler.ts)
+// Parse Redis URL for BullMQ connection
+// BullMQ requires explicit connection options, not just a URL string
+const redisUrl = new URL(config.redis.url);
 const redisConnection = {
-  host: new URL(config.redis.url).hostname || 'localhost',
-  port: parseInt(new URL(config.redis.url).port || '6379', 10),
-  password: new URL(config.redis.url).password || undefined,
+  host: redisUrl.hostname,
+  port: parseInt(redisUrl.port || '6379', 10),
+  password: redisUrl.password || undefined,
+  username: redisUrl.username || undefined,
+  // Enable TLS if the URL uses rediss:// protocol
+  tls: redisUrl.protocol === 'rediss:' ? {} : undefined,
+  maxRetriesPerRequest: null, // Required for BullMQ
 };
 
 interface BatchJobData {
@@ -182,6 +188,13 @@ export function startBatchWorker(): void {
     logger.error(
       { event: 'batch_job_failed', jobId: job?.id, error: err.message },
       `Batch job failed: ${err.message}`
+    );
+  });
+
+  batchWorker.on('error', (err) => {
+    logger.error(
+      { event: 'batch_worker_error', error: err.message },
+      `Batch worker error: ${err.message}`
     );
   });
 
