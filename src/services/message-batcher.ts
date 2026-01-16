@@ -15,18 +15,40 @@ import logger from '../lib/logger';
 const BATCH_DELAY_MS = 2000; // 2 seconds
 const BATCH_TTL_SECONDS = 600; // 10 minutes safety TTL
 
-// Parse Redis URL for BullMQ connection
-// BullMQ requires explicit connection options, not just a URL string
+// Create BullMQ connection using ioredis options from URL
+// We need to pass proper ioredis options, not just a connection object
 const redisUrl = new URL(config.redis.url);
-const redisConnection = {
+const isTLS = redisUrl.protocol === 'rediss:';
+
+// Build connection options that ioredis understands
+const redisConnection: Record<string, unknown> = {
   host: redisUrl.hostname,
   port: parseInt(redisUrl.port || '6379', 10),
-  password: redisUrl.password || undefined,
-  username: redisUrl.username || undefined,
-  // Enable TLS if the URL uses rediss:// protocol
-  tls: redisUrl.protocol === 'rediss:' ? {} : undefined,
   maxRetriesPerRequest: null, // Required for BullMQ
 };
+
+// Add auth if present
+if (redisUrl.password) {
+  redisConnection.password = redisUrl.password;
+}
+if (redisUrl.username && redisUrl.username !== 'default') {
+  redisConnection.username = redisUrl.username;
+}
+
+// Enable TLS for rediss:// URLs (Railway uses TLS)
+if (isTLS) {
+  redisConnection.tls = {
+    rejectUnauthorized: false, // Railway's Redis uses self-signed certs
+  };
+}
+
+logger.info({
+  event: 'redis_connection_config',
+  host: redisUrl.hostname,
+  port: redisUrl.port,
+  hasTLS: isTLS,
+  hasPassword: !!redisUrl.password,
+}, 'BullMQ Redis connection configured');
 
 interface BatchJobData {
   phone: string;
