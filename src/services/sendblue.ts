@@ -151,6 +151,7 @@ export async function sendSMS(phone: string, message: string, mediaUrl?: string)
  * This is an iMessage-only feature and will be ignored for SMS
  */
 export async function sendTypingIndicator(phone: string): Promise<boolean> {
+  console.log(`[TYPING] Sending typing indicator to ${phone.slice(-4)}`);
   try {
     const response = await fetchWithTimeout(SENDBLUE_TYPING_INDICATOR_URL, {
       method: 'POST',
@@ -168,14 +169,15 @@ export async function sendTypingIndicator(phone: string): Promise<boolean> {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Sendblue typing indicator error:', response.status, errorText);
+      console.error(`[TYPING] Error ${response.status}: ${errorText}`);
       return false;
     }
 
+    console.log(`[TYPING] Success for ${phone.slice(-4)}`);
     return true;
   } catch (error) {
     // Typing indicator is non-critical, so we just log and return false
-    console.error('Failed to send typing indicator:', error);
+    console.error('[TYPING] Failed:', error);
     return false;
   }
 }
