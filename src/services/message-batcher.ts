@@ -97,19 +97,18 @@ export async function addMessageToBatch(
     `Added message to batch for ***${phone.slice(-4)}`
   );
 
-  // 2. Cancel existing delayed job (if any)
+  // 2. Remove any existing job with this ID (delayed, waiting, OR completed)
+  // BullMQ won't add a new job if one with the same ID exists, even if completed
   const existingJob = await batchQueue.getJob(jobId);
   if (existingJob) {
     const state = await existingJob.getState();
     logger.info({ event: 'batch_existing_job', jobId, state }, `Existing job state: ${state}`);
-    // Only remove if it's still delayed (not yet processing)
-    if (state === 'delayed' || state === 'waiting') {
-      await existingJob.remove();
-      logger.info(
-        { event: 'batch_job_cancelled', phone: phone.slice(-4) },
-        `Cancelled existing batch job for ***${phone.slice(-4)}`
-      );
-    }
+    // Remove the job regardless of state to allow adding a new one
+    await existingJob.remove();
+    logger.info(
+      { event: 'batch_job_removed', phone: phone.slice(-4), previousState: state },
+      `Removed existing batch job (was ${state}) for ***${phone.slice(-4)}`
+    );
   }
 
   // 3. Schedule new job with fresh 2-second delay
