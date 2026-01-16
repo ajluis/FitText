@@ -80,6 +80,10 @@ export async function addMessageToBatch(
   content: string,
   mediaUrl: string | null
 ): Promise<void> {
+  // Send typing indicator immediately so user sees bubble during the 2-second wait
+  // Don't await - fire and forget so we don't slow down the webhook response
+  sendTypingIndicator(phone).catch(() => {}); // Ignore errors, non-critical
+
   const batchKey = `batch:pending:${phone}`;
   const jobId = `batch-${phone}`;
 
@@ -151,9 +155,6 @@ async function processBatch(job: Job<BatchJobData>): Promise<void> {
     { event: 'batch_processing', phone: phone.slice(-4), messageCount: messages.length },
     `Processing batch of ${messages.length} message(s) for ***${phone.slice(-4)}`
   );
-
-  // Send typing indicator to show user we're processing (iMessage only)
-  await sendTypingIndicator(phone);
 
   // Combine text content (join with newlines)
   const combinedContent = messages
