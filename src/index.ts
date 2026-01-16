@@ -172,7 +172,7 @@ async function main() {
     logger.info('Scheduler started');
 
     // Start the message batch worker
-    startBatchWorker();
+    await startBatchWorker();
     logger.info('Message batch worker started');
 
     // Start the HTTP server

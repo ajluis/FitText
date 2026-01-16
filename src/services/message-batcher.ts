@@ -188,10 +188,26 @@ let batchWorker: Worker<BatchJobData> | null = null;
 /**
  * Start the batch worker
  */
-export function startBatchWorker(): void {
+export async function startBatchWorker(): Promise<void> {
   if (batchWorker) {
     logger.warn({ event: 'batch_worker_exists' }, 'Batch worker already running');
     return;
+  }
+
+  // Test the queue connection first
+  try {
+    const testJob = await batchQueue.add('test-connection', {
+      phone: '+10000000000',
+      batchKey: 'test:startup',
+    }, { delay: 100 });
+    logger.info({ event: 'batch_queue_test', jobId: testJob.id }, 'Test job added to queue');
+
+    // Remove the test job
+    await testJob.remove();
+    logger.info({ event: 'batch_queue_test_success' }, 'Queue connection verified');
+  } catch (err) {
+    logger.error({ event: 'batch_queue_test_failed', error: (err as Error).message }, 'Failed to test queue connection');
+    throw err;
   }
 
   batchWorker = new Worker<BatchJobData>('message-batching', processBatch, {
@@ -199,8 +215,13 @@ export function startBatchWorker(): void {
     concurrency: 5, // Process up to 5 batches concurrently
   });
 
+  // Log when worker is ready
+  batchWorker.on('ready', () => {
+    logger.info({ event: 'batch_worker_ready' }, 'Batch worker connected and ready');
+  });
+
   batchWorker.on('completed', (job) => {
-    logger.debug(
+    logger.info(
       { event: 'batch_job_completed', jobId: job.id, phone: job.data.phone.slice(-4) },
       `Batch job completed for ***${job.data.phone.slice(-4)}`
     );
